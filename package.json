@@ -1,0 +1,37 @@
+{
+  "name": "rag-system",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "format": "prettier --write src tests examples/*.ts *.json *.mjs .github/workflows/*.yml",
+    "format:check": "prettier --check src tests examples/*.ts *.json *.mjs .github/workflows/*.yml",
+    "ingest": "tsx src/cli/ingest.ts",
+    "ask": "tsx src/cli/ask.ts",
+    "evaluate": "tsx src/cli/evaluate.ts",
+    "embed-chunks": "tsx src/cli/embed-chunks.ts",
+    "smoke:embeddings": "tsx examples/embedding-smoke-test.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "lint": "eslint src tests examples --max-warnings 0",
+    "check": "npm run typecheck && npm run lint && npm test && npm run build"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.3.2",
+    "commander": "^14.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^22.10.1",
+    "eslint": "^9.39.0",
+    "prettier": "^3.10.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.46.0"
+  }
+}
