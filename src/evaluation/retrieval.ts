@@ -1,12 +1,11 @@
-import { join } from 'node:path';
 import { z } from 'zod';
-import { nonBlank, positiveInteger } from '../domain/models.js';
-import type { HttpClient, PairScorer } from '../domain/ports.js';
-import { loadChunks } from '../storage/jsonl.js';
-import { retrieve } from '../retrieval/search.js';
-import type { RetrievalOptions } from '../retrieval/search.js';
-import { rerank } from '../retrieval/reranking.js';
-import type { RerankOptions } from '../retrieval/reranking.js';
+import { nonBlank, positiveInteger } from '../domain/models.ts';
+import type { HttpClient, PairScorer } from '../domain/ports.ts';
+import type { Corpus } from '../domain/models.ts';
+import { retrieve } from '../retrieval/search.ts';
+import type { RetrievalOptions } from '../retrieval/search.ts';
+import { rerank } from '../retrieval/reranking.ts';
+import type { RerankOptions } from '../retrieval/reranking.ts';
 
 export const evaluationCaseSchema = z.union([
   z.object({
@@ -26,17 +25,13 @@ export interface EvaluationOptions extends RetrievalOptions {
   scorer?: PairScorer;
   http?: HttpClient;
 }
-export async function evaluate(
-  artifactDir: string,
-  input: unknown,
-  options: EvaluationOptions = {},
-) {
+export async function evaluate(corpus: Corpus, input: unknown, options: EvaluationOptions = {}) {
   const cases = z.array(evaluationCaseSchema).nonempty().parse(input);
   const topK = positiveInteger.parse(options.topK ?? 20);
   const candidateK = positiveInteger.parse(options.candidateK ?? 150);
   const method = options.method ?? 'hybrid';
   if (candidateK < topK) throw new Error('candidate_k must be >= positive top_k');
-  const chunks = await loadChunks(join(artifactDir, 'chunks.jsonl'));
+  const { chunks } = corpus;
   const knownIds = new Set(chunks.map((chunk) => chunk.chunk_id));
   const knownSources = new Set(chunks.map((chunk) => chunk.source));
   const validated = cases.map((item) => {
@@ -51,7 +46,7 @@ export async function evaluate(
   const rows = [];
   for (const item of validated) {
     const start = performance.now();
-    let results = await retrieve(item.question, artifactDir, {
+    let results = await retrieve(item.question, corpus, {
       ...options,
       method,
       topK: options.rerankModel ? candidateK : topK,
@@ -60,7 +55,7 @@ export async function evaluate(
       results = await rerank(item.question, results, {
         ...options,
         model: options.rerankModel,
-        provider: options.rerankProvider ?? 'local',
+        provider: options.rerankProvider ?? 'cohere',
         topK,
       });
     const labels = results.map((result) =>
@@ -84,7 +79,7 @@ export async function evaluate(
     top_k: topK,
     candidate_k: candidateK,
     rerank_model: options.rerankModel ?? null,
-    rerank_provider: options.rerankProvider ?? 'local',
+    rerank_provider: options.rerankProvider ?? 'cohere',
     case_count: rows.length,
     recall_at_k: recall,
     failure_rate: 1 - recall,

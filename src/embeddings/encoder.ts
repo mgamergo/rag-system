@@ -1,17 +1,17 @@
-import { nonBlank, positiveInteger, retrievalText, vectorSchema } from '../domain/models.js';
-import type { Chunk, Embedding } from '../domain/models.js';
-import type { Encoder } from '../domain/ports.js';
-import { DEFAULT_EMBEDDING_MODEL, localEncoder } from './local.js';
-import { remoteEncoder } from './remote.js';
+import { nonBlank, positiveInteger, retrievalText, vectorSchema } from '../domain/models.ts';
+import type { Chunk, Embedding } from '../domain/models.ts';
+import type { Encoder } from '../domain/ports.ts';
+export const DEFAULT_EMBEDDING_MODEL = 'openrouter:nvidia/nemotron-3-embed-1b:free';
+import { remoteEncoder } from './remote.ts';
 
 export interface EmbeddingOptions {
   model?: string;
   batchSize?: number;
-  device?: string | undefined;
   encoder?: Encoder;
 }
 function encoderFor(model: string): Encoder {
-  return /^(gemini|voyage):/u.test(model) ? remoteEncoder() : localEncoder;
+  nonBlank.parse(model);
+  return remoteEncoder();
 }
 
 export async function embedChunks(
@@ -24,7 +24,6 @@ export async function embedChunks(
   const vectors = await (options.encoder ?? encoderFor(model)).encode(chunks.map(retrievalText), {
     model,
     batchSize,
-    device: options.device,
     query: false,
   });
   if (vectors.length !== chunks.length)
@@ -47,7 +46,6 @@ export async function embedQuery(
   const vectors = await (options.encoder ?? encoderFor(model)).encode([question], {
     model,
     batchSize: 1,
-    device: options.device,
     query: true,
   });
   if (vectors.length !== 1) throw new Error('Expected exactly one query embedding');

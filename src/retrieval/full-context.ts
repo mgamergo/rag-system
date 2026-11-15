@@ -1,15 +1,10 @@
-import { join } from 'node:path';
-import { characterLength, characterSlice, positiveInteger } from '../domain/models.js';
-import type { Chunk, RetrievedChunk } from '../domain/models.js';
-import { loadChunks } from '../storage/jsonl.js';
+import { characterLength, characterSlice, positiveInteger } from '../domain/models.ts';
+import type { Chunk, RetrievedChunk } from '../domain/models.ts';
 
-export async function fullCorpus(
-  artifactDir: string,
-  maxChars = 600_000,
-): Promise<RetrievedChunk[]> {
+export function fullCorpus(input: Chunk[], maxChars = 600_000): RetrievedChunk[] {
   positiveInteger.parse(maxChars);
   const documents = new Map<string, Chunk[]>();
-  for (const chunk of await loadChunks(join(artifactDir, 'chunks.jsonl'))) {
+  for (const chunk of input) {
     const group = documents.get(chunk.document_id) ?? [];
     group.push(chunk);
     documents.set(chunk.document_id, group);
@@ -41,7 +36,7 @@ export async function fullCorpus(
     total += characterLength(text);
     if (total > maxChars)
       throw new Error(
-        'Corpus exceeds --full-context-max-chars; use retrieval or increase the budget',
+        'Corpus exceeds full-context character budget; use retrieval or increase the budget',
       );
     sources.push({
       chunk: {

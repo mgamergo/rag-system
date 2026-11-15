@@ -1,5 +1,5 @@
-import { boundarySchema, characters, positiveInteger } from '../domain/models.js';
-import type { ChunkBoundary, RawChunk } from '../domain/models.js';
+import { boundarySchema, characters, positiveInteger } from '../domain/models.ts';
+import type { ChunkBoundary, RawChunk } from '../domain/models.ts';
 
 export function validateChunkConfig(chunkSize: number, overlap: number): void {
   positiveInteger.parse(chunkSize);

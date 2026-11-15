@@ -1,5 +1,5 @@
-import type { Chunk } from '../domain/models.js';
-import { retrievalText } from '../domain/models.js';
+import type { Chunk } from '../domain/models.ts';
+import { retrievalText } from '../domain/models.ts';
 
 export function tokenize(text: string): string[] {
   return (

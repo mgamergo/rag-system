@@ -5,11 +5,11 @@ import {
   positiveNumber,
   rerankProviderSchema,
   retrievalText,
-} from '../domain/models.js';
-import type { RetrievedChunk } from '../domain/models.js';
-import type { HttpClient, PairScorer } from '../domain/ports.js';
-import { DEFAULT_RERANK_MODEL, localPairScorer } from '../embeddings/local.js';
-import { apiKey, postJson } from '../infrastructure/http.js';
+} from '../domain/models.ts';
+import type { RetrievedChunk } from '../domain/models.ts';
+import type { HttpClient, PairScorer } from '../domain/ports.ts';
+export const DEFAULT_RERANK_MODEL = 'rerank-v3.5';
+import { apiKey, postJson } from '../infrastructure/http.ts';
 
 const recordSchema = z.object({
   index: z.number().int().nonnegative(),
@@ -21,7 +21,6 @@ export interface RerankOptions {
   topK?: number;
   batchSize?: number;
   timeout?: number;
-  device?: string | undefined;
   scorer?: PairScorer;
   http?: HttpClient;
 }
@@ -32,7 +31,7 @@ export async function rerank(
 ): Promise<RetrievedChunk[]> {
   nonBlank.parse(question);
   const model = nonBlank.parse(options.model ?? DEFAULT_RERANK_MODEL);
-  const provider = rerankProviderSchema.parse(options.provider ?? 'local');
+  const provider = rerankProviderSchema.parse(options.provider ?? 'cohere');
   const topK = positiveInteger.parse(options.topK ?? 20);
   const batchSize = positiveInteger.parse(options.batchSize ?? 32);
   const timeout = positiveNumber.parse(options.timeout ?? 120);
@@ -41,11 +40,10 @@ export async function rerank(
     throw new Error('Reranking candidates must have unique chunk IDs');
   const texts = candidates.map((item) => retrievalText(item.chunk));
   let records: z.infer<typeof recordSchema>[];
-  if (provider === 'local') {
-    const scores = await (options.scorer ?? localPairScorer).score(question, texts, {
+  if (options.scorer) {
+    const scores = await options.scorer.score(question, texts, {
       model,
       batchSize,
-      device: options.device,
     });
     if (scores.length !== candidates.length)
       throw new Error('Reranker returned a different number of scores than candidates');

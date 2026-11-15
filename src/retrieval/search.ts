@@ -1,4 +1,3 @@
-import { join } from 'node:path';
 import { z } from 'zod';
 import {
   lexicalMethodSchema,
@@ -6,12 +5,12 @@ import {
   positiveInteger,
   retrievalMethodSchema,
   vectorSchema,
-} from '../domain/models.js';
-import type { Chunk, RetrievedChunk, RetrievalMethod, LexicalMethod } from '../domain/models.js';
-import type { Encoder } from '../domain/ports.js';
-import { embedQuery } from '../embeddings/encoder.js';
-import { loadChunks, loadEmbeddings } from '../storage/jsonl.js';
-import { LexicalIndex } from './lexical.js';
+} from '../domain/models.ts';
+import type { Chunk, RetrievedChunk, RetrievalMethod, LexicalMethod } from '../domain/models.ts';
+import type { Encoder } from '../domain/ports.ts';
+import { embedQuery } from '../embeddings/encoder.ts';
+import type { Corpus } from '../domain/models.ts';
+import { LexicalIndex } from './lexical.ts';
 
 export interface RetrievalOptions {
   topK?: number;
@@ -19,7 +18,6 @@ export interface RetrievalOptions {
   method?: RetrievalMethod;
   lexicalMethod?: LexicalMethod;
   rrfConstant?: number;
-  device?: string | undefined;
   encoder?: Encoder;
 }
 export function reciprocalRankFusion(
@@ -61,7 +59,7 @@ function lexicalRanking(
 
 export async function retrieve(
   question: string,
-  artifactDir: string,
+  corpus: Corpus,
   options: RetrievalOptions = {},
 ): Promise<RetrievedChunk[]> {
   nonBlank.parse(question);
@@ -71,7 +69,7 @@ export async function retrieve(
   const method = retrievalMethodSchema.parse(options.method ?? 'semantic');
   const lexical = lexicalMethodSchema.parse(options.lexicalMethod ?? 'bm25');
   if (candidateK < topK) throw new Error('candidate_k must be >= top_k');
-  const chunks = await loadChunks(join(artifactDir, 'chunks.jsonl'));
+  const { chunks } = corpus;
   if (!chunks.length) throw new Error('The index is empty. Ingest non-empty documents first');
   const byId = new Map(chunks.map((chunk) => [chunk.chunk_id, chunk]));
   if (byId.size !== chunks.length) throw new Error('chunks.jsonl contains duplicate chunk IDs');
@@ -81,7 +79,7 @@ export async function retrieve(
   const vectors = new Map<string, number[]>();
   let model: string | undefined;
   let dimensions: number | undefined;
-  for (const record of await loadEmbeddings(join(artifactDir, 'embeddings.jsonl'))) {
+  for (const record of corpus.embeddings) {
     if (!byId.has(record.chunk_id) || vectors.has(record.chunk_id))
       throw new Error('Unknown or duplicate embedding chunk ID');
     if (model !== undefined && model !== record.model)
@@ -97,7 +95,6 @@ export async function retrieve(
   const query = unitVector(
     await embedQuery(question, {
       model,
-      device: options.device,
       ...(options.encoder ? { encoder: options.encoder } : {}),
     }),
   );

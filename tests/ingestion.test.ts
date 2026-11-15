@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdir, readFile, writeFile, access } from 'node:fs/promises';
-import { join } from 'node:path';
-import { chunkText } from '../src/ingestion/chunking.js';
-import { findDocuments } from '../src/ingestion/documents.js';
-import { runIngestion } from '../src/pipelines/ingestion.js';
-import { embedChunks } from '../src/embeddings/encoder.js';
-import { characterSlice } from '../src/domain/models.js';
-import { loadChunks, loadEmbeddings, saveJsonl } from '../src/storage/jsonl.js';
-import { chunks, encoder, neverEncoder, temporary } from './helpers.js';
-
+import { chunkText } from '../src/ingestion/chunking.ts';
+import { normalizeDocument, decodeDocument } from '../src/ingestion/documents.ts';
+import { runIngestion } from '../src/pipelines/ingestion.ts';
+import { embedChunks } from '../src/embeddings/encoder.ts';
+import { characterSlice, chunkSchema } from '../src/domain/models.ts';
+import {
+  ingestionConfigSchema,
+  askConfigSchema,
+  evaluationConfigSchema,
+} from '../src/domain/config.ts';
+import { parseJsonl, serializeJsonl } from '../src/storage/jsonl.ts';
+import { chunks, encoder, neverEncoder } from './helpers.ts';
 for (const boundary of ['character', 'sentence', 'paragraph'] as const) {
   for (const overlap of [0, 5, 29])
     void test(`${boundary} offsets, progress, overlap, Unicode and coverage (${overlap})`, () => {
@@ -47,126 +49,87 @@ void test('natural boundaries select the final eligible sentence or paragraph', 
     'First paragraph.\n\n',
   );
 });
-void test('directory ingestion persists linked artifacts and exact normalized offsets', async (t) => {
-  const root = await temporary(t);
-  const input = join(root, 'input');
-  await mkdir(join(input, 'nested'), { recursive: true });
-  for (const directory of ['.git', 'node_modules', '.cache', '.venv', 'venv', '__pycache__']) {
-    await mkdir(join(input, directory));
-    await writeFile(join(input, directory, 'skip.md'), 'skip');
-  }
-  await writeFile(join(input, 'skip.pdf'), 'skip');
-  await writeFile(join(input, 'nested', 'notes.MD'), '\uFEFFACME 😀 Q2.\r\nRevenue grew by 3%.\r');
-  const calls: string[][] = [];
-  const result = await runIngestion(input, {
-    outputDir: join(root, 'output'),
+
+void test('strict decoding and normalization preserve normalized offsets', () => {
+  assert.equal(normalizeDocument('notes.MD', '\uFEFFACME 😀\r\nRevenue.\r'), 'ACME 😀\nRevenue.\n');
+  assert.throws(() => decodeDocument(new Uint8Array([255]).buffer));
+  assert.throws(() => normalizeDocument('x.pdf', 'text'));
+  assert.throws(() => normalizeDocument('x.md', '   '));
+});
+void test('ingestion preserves original evidence and contextual embedding inputs', async () => {
+  const text = 'ACME 😀 Q2. Revenue grew 3%.';
+  const seen: string[] = [];
+  const corpus = await runIngestion([{ document_id: 'doc', source: 'a.md', text }], {
     chunkSize: 15,
     overlap: 2,
-    encoder,
-    contextualize: (whole, part) => {
-      calls.push([whole, part]);
-      return Promise.resolve(' ACME financial results ');
+    contextualize: (whole) => {
+      assert.equal(whole, text);
+      return Promise.resolve(' ACME report ');
+    },
+    encoder: {
+      encode: (texts) => {
+        seen.push(...texts);
+        return Promise.resolve(texts.map(() => [1, 0]));
+      },
     },
   });
-  assert.equal((await findDocuments(input)).length, 1);
-  const saved = await loadChunks(join(result.outputDir, 'chunks.jsonl'));
-  const vectors = await loadEmbeddings(join(result.outputDir, 'embeddings.jsonl'));
-  assert.equal(saved.length, vectors.length);
-  assert.equal(new Set(saved.map((c) => c.chunk_id)).size, saved.length);
-  for (const chunk of saved) {
-    assert.equal(chunk.context, 'ACME financial results');
-    assert.equal(
-      chunk.text,
-      characterSlice('ACME 😀 Q2.\nRevenue grew by 3%.\n', chunk.start_char, chunk.end_char),
-    );
-    assert.ok(vectors.some((v) => v.chunk_id === chunk.chunk_id));
+  assert.equal(corpus.chunks.length, corpus.embeddings.length);
+  for (const c of corpus.chunks) {
+    assert.equal(c.context, 'ACME report');
+    assert.equal(c.text, characterSlice(text, c.start_char, c.end_char));
+    assert.ok(seen.includes(`ACME report\n\n${c.text}`));
   }
-  assert.ok(calls.every(([whole]) => whole === 'ACME 😀 Q2.\nRevenue grew by 3%.\n'));
 });
-void test('empty and invalid UTF-8 documents are failures while valid documents continue', async (t) => {
-  const root = await temporary(t);
-  await writeFile(join(root, 'empty.md'), ' \n');
-  await writeFile(join(root, 'invalid.txt'), Buffer.from([0xff]));
-  await writeFile(join(root, 'good.md'), 'valid');
-  const result = await runIngestion(root, { outputDir: join(root, 'output'), encoder });
-  assert.equal(result.failures.length, 2);
-  assert.equal(result.chunkCount, 1);
-});
-void test('empty input does not load an encoder; empty saved chunks stay supported', async (t) => {
-  const root = await temporary(t);
-  const result = await runIngestion(root, {
-    outputDir: join(root, 'output'),
-    encoder: neverEncoder,
+void test('empty corpus avoids models and invalid options fail before inference', async () => {
+  assert.deepEqual(await runIngestion([], { encoder: neverEncoder }), {
+    chunks: [],
+    embeddings: [],
   });
-  assert.equal(result.chunkCount, 0);
-  assert.deepEqual(await embedChunks([], { encoder: neverEncoder }), []);
-});
-void test('invalid input and chunk configurations do not write artifacts', async (t) => {
-  const root = await temporary(t);
   for (const config of [
     { chunkSize: 0 },
     { overlap: -1 },
     { chunkSize: 5, overlap: 5 },
     { batchSize: 0 },
-  ]) {
-    await assert.rejects(
-      runIngestion(root, { ...config, outputDir: join(root, 'output'), encoder: neverEncoder }),
-    );
-  }
-  await assert.rejects(
-    runIngestion(join(root, 'missing'), { outputDir: join(root, 'output'), encoder: neverEncoder }),
-  );
-  await writeFile(join(root, 'unsupported.pdf'), 'x');
-  await assert.rejects(
-    runIngestion(join(root, 'unsupported.pdf'), {
-      outputDir: join(root, 'output'),
-      encoder: neverEncoder,
-    }),
-  );
-  await assert.rejects(access(join(root, 'output')));
+  ])
+    await assert.rejects(runIngestion([], { ...config, encoder: neverEncoder }));
 });
-void test('context and embedding failures preserve existing artifacts', async (t) => {
-  const root = await temporary(t);
-  await writeFile(join(root, 'doc.md'), 'original text');
-  const result = await runIngestion(join(root, 'doc.md'), {
-    outputDir: join(root, 'output'),
-    encoder,
-  });
-  const before = await Promise.all(
-    ['chunks', 'embeddings', 'failures'].map((name) =>
-      readFile(join(result.outputDir, `${name}.jsonl`), 'utf8'),
-    ),
-  );
-  await assert.rejects(
-    runIngestion(join(root, 'doc.md'), { outputDir: result.outputDir, encoder: neverEncoder }),
-  );
-  await assert.rejects(
-    runIngestion(join(root, 'doc.md'), {
-      outputDir: result.outputDir,
-      encoder,
-      contextualize: () => Promise.resolve(' '),
-    }),
-  );
-  assert.deepEqual(
-    await Promise.all(
-      ['chunks', 'embeddings', 'failures'].map((name) =>
-        readFile(join(result.outputDir, `${name}.jsonl`), 'utf8'),
-      ),
-    ),
-    before,
-  );
+void test('context and embedding failures yield no partial ingestion result', async () => {
+  const docs = [{ document_id: 'd', source: 'a.md', text: 'original' }];
+  await assert.rejects(runIngestion(docs, { encoder: neverEncoder }));
+  await assert.rejects(runIngestion(docs, { encoder, contextualize: () => Promise.resolve(' ') }));
 });
 void test('invalid vectors, dimensions and counts are rejected', async () => {
-  for (const vectors of [[], [[0, 0]], [[NaN, 0]], [[Infinity]], [[]], [[1], [1, 2]]]) {
+  for (const vectors of [[], [[0, 0]], [[NaN, 0]], [[Infinity]], [[]], [[1], [1, 2]]])
     await assert.rejects(
       embedChunks(chunks('one', 'two'), { encoder: { encode: () => Promise.resolve(vectors) } }),
     );
-  }
 });
-void test('serialization failure preserves a destination', async (t) => {
-  const root = await temporary(t);
-  const path = join(root, 'data.jsonl');
-  await writeFile(path, 'previous');
-  await assert.rejects(saveJsonl([{ value: NaN }], path));
-  assert.equal(await readFile(path, 'utf8'), 'previous');
+void test('JSONL upload/export validates lines and supports legacy empty context', () => {
+  const [chunk] = chunks('one');
+  assert.ok(chunk);
+  assert.equal(parseJsonl(serializeJsonl([chunk]), chunkSchema)[0]?.text, 'one');
+  assert.throws(() => parseJsonl('{}\ninvalid', chunkSchema), /line 1/u);
+  assert.throws(() => serializeJsonl([{ n: NaN }]));
+});
+void test('UI configuration schemas enforce conditional controls and defaults', () => {
+  assert.equal(ingestionConfigSchema.parse({}).chunkSize, 500);
+  assert.equal(askConfigSchema.parse({}).topK, 20);
+  for (const input of [
+    { chunkSize: 10, overlap: 10 },
+    { context: { enabled: true } },
+    { context: { instruction: 'custom' } },
+  ])
+    assert.equal(ingestionConfigSchema.safeParse(input).success, false);
+  for (const input of [
+    { topK: 2.5 },
+    { candidateK: 1 },
+    { rerank: { enabled: true } },
+    { fullContext: true, rerank: { enabled: true, model: 'rank' } },
+    { timeout: 0 },
+  ])
+    assert.equal(askConfigSchema.safeParse(input).success, false);
+  assert.equal(
+    evaluationConfigSchema.safeParse({ retrieval: askConfigSchema.parse({}), ks: [200] }).success,
+    false,
+  );
 });

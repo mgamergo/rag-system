@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { nonBlank, positiveInteger, positiveNumber } from '../domain/models.js';
-import type { HttpClient } from '../domain/ports.js';
-import { apiKey, postJson } from '../infrastructure/http.js';
+import { nonBlank, positiveInteger, positiveNumber } from '../domain/models.ts';
+import type { HttpClient } from '../domain/ports.ts';
+import { apiKey, postJson } from '../infrastructure/http.ts';
 
 export const DEFAULT_INSTRUCTION =
   'Give a short context of 50-100 tokens situating this chunk within the whole document to improve search retrieval. Include relevant entities, dates, and identifiers. Answer only with the context.';
@@ -78,7 +78,7 @@ export class Contextualizer {
       this.usage[name] += data.usage[name];
     }
     if (data.stop_reason === 'max_tokens')
-      throw new Error('Context hit the output limit; increase --context-max-tokens');
+      throw new Error('Context hit the output limit; increase the context token limit');
     return nonBlank
       .parse(
         data.content

@@ -1,39 +1,24 @@
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { boundarySchema, nonBlank, positiveInteger } from '../domain/models.js';
-import type { Chunk, ChunkBoundary, IngestionFailure } from '../domain/models.js';
-import type { Contextualize } from '../domain/ports.js';
-import { embedChunks } from '../embeddings/encoder.js';
-import type { EmbeddingOptions } from '../embeddings/encoder.js';
-import { chunkText, validateChunkConfig } from '../ingestion/chunking.js';
-import { ingestDocuments } from '../ingestion/documents.js';
-import { expandPath, saveChunks, saveEmbeddings, saveFailures } from '../storage/jsonl.js';
-
+import { boundarySchema, nonBlank, positiveInteger } from '../domain/models.ts';
+import type { Chunk, ChunkBoundary, Corpus, Document } from '../domain/models.ts';
+import type { Contextualize } from '../domain/ports.ts';
+import { embedChunks } from '../embeddings/encoder.ts';
+import type { EmbeddingOptions } from '../embeddings/encoder.ts';
+import { chunkText, validateChunkConfig } from '../ingestion/chunking.ts';
 export interface IngestionOptions extends EmbeddingOptions {
-  outputDir?: string;
   chunkSize?: number;
   overlap?: number;
   boundary?: ChunkBoundary;
   contextualize?: Contextualize;
 }
-export interface IngestionResult {
-  outputDir: string;
-  chunkCount: number;
-  embeddingCount: number;
-  failures: IngestionFailure[];
-}
 export async function runIngestion(
-  documentPath: string,
+  documents: Document[],
   options: IngestionOptions = {},
-): Promise<IngestionResult> {
+): Promise<Corpus> {
   const { chunkSize = 500, overlap = 50, boundary = 'character' } = options;
   validateChunkConfig(chunkSize, overlap);
   boundarySchema.parse(boundary);
   positiveInteger.parse(options.batchSize ?? 32);
-  const outputDir = expandPath(
-    options.outputDir ?? join('artifacts', `run-${randomUUID().replaceAll('-', '')}`),
-  );
-  const { documents, failures } = await ingestDocuments(documentPath);
   const chunks: Chunk[] = [];
   for (const document of documents) {
     for (const [index, raw] of chunkText(document.text, {
@@ -57,8 +42,5 @@ export async function runIngestion(
     }
   }
   const embeddings = await embedChunks(chunks, options);
-  await saveChunks(chunks, join(outputDir, 'chunks.jsonl'));
-  await saveEmbeddings(embeddings, join(outputDir, 'embeddings.jsonl'));
-  await saveFailures(failures, join(outputDir, 'failures.jsonl'));
-  return { outputDir, chunkCount: chunks.length, embeddingCount: embeddings.length, failures };
+  return { chunks, embeddings };
 }

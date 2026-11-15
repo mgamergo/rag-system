@@ -1,16 +1,6 @@
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { TestContext } from 'node:test';
-import type { Chunk, Embedding } from '../src/domain/models.js';
-import type { Encoder, HttpClient } from '../src/domain/ports.js';
-import { saveChunks, saveEmbeddings } from '../src/storage/jsonl.js';
-
-export async function temporary(t: TestContext): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'rag-test-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  return root;
-}
+import type { Chunk, Corpus } from '../src/domain/models.ts';
+import type { Encoder, HttpClient } from '../src/domain/ports.ts';
 export function environment(t: TestContext, name: string, value: string): void {
   const previous = process.env[name];
   process.env[name] = value;
@@ -37,18 +27,17 @@ export const neverEncoder: Encoder = {
     throw new Error('Model must not load');
   },
 };
-export async function index(
-  root: string,
-  records = chunks('RAG retrieves evidence.', 'Cats sleep.'),
-): Promise<Chunk[]> {
-  await saveChunks(records, join(root, 'chunks.jsonl'));
-  const embeddings: Embedding[] = records.map((chunk, i) => ({
-    chunk_id: chunk.chunk_id,
-    model: 'test-encoder',
-    embedding: i === 0 ? [3, 0] : [0, 2],
-  }));
-  await saveEmbeddings(embeddings.reverse(), join(root, 'embeddings.jsonl'));
-  return records;
+export function index(records = chunks('RAG retrieves evidence.', 'Cats sleep.')): Corpus {
+  return {
+    chunks: records,
+    embeddings: records
+      .map((chunk, i) => ({
+        chunk_id: chunk.chunk_id,
+        model: 'test-encoder',
+        embedding: i === 0 ? [3, 0] : [0, 2],
+      }))
+      .reverse(),
+  };
 }
 export function fakeHttp(
   response: unknown,

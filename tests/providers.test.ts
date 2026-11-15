@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { z } from 'zod';
-import { remoteEncoder } from '../src/embeddings/remote.js';
-import { Contextualizer } from '../src/ingestion/contextualize.js';
-import { ChatGenerator, buildMessages } from '../src/generation/chat.js';
-import { rerank } from '../src/retrieval/reranking.js';
-import { postJson } from '../src/infrastructure/http.js';
-import { chunks, fakeHttp, environment } from './helpers.js';
+import { remoteEncoder } from '../src/embeddings/remote.ts';
+import { Contextualizer } from '../src/ingestion/contextualize.ts';
+import { ChatGenerator, buildMessages } from '../src/generation/chat.ts';
+import { rerank } from '../src/retrieval/reranking.ts';
+import { postJson } from '../src/infrastructure/http.ts';
+import { chunks, fakeHttp, environment } from './helpers.ts';
 
 const bodySchema = z.object({
   model: z.string(),
@@ -49,7 +49,6 @@ void test('Voyage embeddings reorder indexes and distinguish query/document task
       model: 'voyage:chosen',
       batchSize: 32,
       query: false,
-      device: undefined,
     }),
     [
       [1, 0],
@@ -68,7 +67,7 @@ void test('Voyage embeddings reorder indexes and distinguish query/document task
   const queryCalls: Parameters<typeof fakeHttp>[1] = [];
   await remoteEncoder(fakeHttp({ data: [{ index: 0, embedding: [1, 0] }] }, queryCalls)).encode(
     ['q'],
-    { model: 'voyage:chosen', batchSize: 32, query: true, device: undefined },
+    { model: 'voyage:chosen', batchSize: 32, query: true },
   );
   assert.equal(z.object({ input_type: z.string() }).parse(queryCalls[0]?.body).input_type, 'query');
 });
@@ -87,7 +86,7 @@ void test('Gemini embeddings cap batches at 100 and use retrieval task types', a
     (
       await remoteEncoder(http).encode(
         Array.from({ length: 101 }, () => 'text'),
-        { model: 'gemini:chosen', batchSize: 500, query: false, device: undefined },
+        { model: 'gemini:chosen', batchSize: 500, query: false },
       )
     ).length,
     101,
@@ -103,7 +102,6 @@ void test('Gemini embeddings cap batches at 100 and use retrieval task types', a
     model: 'gemini:chosen',
     batchSize: 32,
     query: true,
-    device: undefined,
   });
   assert.equal(
     z.object({ requests: z.array(z.object({ taskType: z.string() })) }).parse(calls.at(-1)?.body)
@@ -124,7 +122,6 @@ void test('hosted embedding responses reject duplicate indexes, bad vectors and 
         model: 'voyage:chosen',
         batchSize: 1,
         query: true,
-        device: undefined,
       }),
     );
 });
@@ -165,7 +162,7 @@ void test('contextualizer rejects empty and truncated content', async (t) => {
       ),
     );
 });
-for (const provider of ['openrouter', 'ollama'] as const)
+for (const provider of ['openrouter'] as const)
   void test(`${provider} uses grounded messages, auth and chat-completions format`, async (t) => {
     environment(t, 'OPENROUTER_API_KEY', 'fake');
     const calls: Parameters<typeof fakeHttp>[1] = [];
@@ -177,10 +174,7 @@ for (const provider of ['openrouter', 'ollama'] as const)
     assert.equal(await client.generate('q', candidates), 'answer [1]');
     const call = calls[0];
     assert.ok(call);
-    assert.equal(
-      call.headers.get('authorization'),
-      provider === 'openrouter' ? 'Bearer fake' : null,
-    );
+    assert.equal(call.headers.get('authorization'), 'Bearer fake');
     assert.ok(call.url.endsWith('/chat/completions'));
     const body = bodySchema.parse(call.body);
     assert.equal(body.temperature, 0);
@@ -211,30 +205,38 @@ void test('generation rejects malformed, empty and truncated answers', async () 
     { choices: [{ finish_reason: 'length', message: { content: 'partial' } }] },
   ])
     await assert.rejects(
-      new ChatGenerator({ provider: 'ollama', model: 'chosen', http: fakeHttp(response) }).generate(
-        'q',
-        candidates,
-      ),
+      new ChatGenerator({
+        provider: 'openrouter',
+        apiKey: 'test-only',
+        model: 'chosen',
+        http: fakeHttp(response),
+      }).generate('q', candidates),
     );
 });
-void test('generation validates models, limits, URL and empty context before a request', async () => {
-  for (const options of [
-    { model: '' },
-    { maxTokens: 0 },
-    { timeout: NaN },
-    { ollamaBaseUrl: 'ftp://localhost' },
-    { ollamaBaseUrl: 'http://localhost?x=y' },
-  ])
-    assert.throws(() => new ChatGenerator({ provider: 'ollama', model: 'chosen', ...options }));
+void test('generation validates models, limits and empty context before a request', async () => {
+  for (const options of [{ model: '' }, { maxTokens: 0 }, { timeout: NaN }])
+    assert.throws(
+      () =>
+        new ChatGenerator({
+          provider: 'openrouter',
+          apiKey: 'test-only',
+          model: 'chosen',
+          ...options,
+        }),
+    );
   await assert.rejects(
-    new ChatGenerator({ provider: 'ollama', model: 'chosen' }).generate('q', []),
+    new ChatGenerator({ provider: 'openrouter', apiKey: 'test-only', model: 'chosen' }).generate(
+      'q',
+      [],
+    ),
   );
 });
 void test('provider errors have useful hints and never include response secrets', async () => {
   for (const status of [401, 402, 404, 429, 500])
     await assert.rejects(
       new ChatGenerator({
-        provider: 'ollama',
+        provider: 'openrouter',
+        apiKey: 'test-only',
         model: 'chosen',
         http: fakeHttp({ secret: 'must-not-appear' }, [], status),
       }).generate('q', candidates),
@@ -253,7 +255,7 @@ void test('provider errors have useful hints and never include response secrets'
     /test request failed/u,
   );
 });
-void test('local cross encoder sees contextual text and reranks before selecting top-k', async () => {
+void test('injected pair scorer sees contextual text and reranks before selecting top-k', async () => {
   const results = await rerank('q', candidates, {
     topK: 1,
     scorer: {
@@ -300,3 +302,33 @@ for (const provider of ['cohere', 'voyage'] as const)
         }),
       );
   });
+
+void test('OpenRouter embedding adapter validates ordering and document/query tasks', async (t) => {
+  environment(t, 'OPENROUTER_API_KEY', 'test-only');
+  const calls: Parameters<typeof fakeHttp>[1] = [];
+  const adapter = remoteEncoder(fakeHttp({ data: [{ index: 0, embedding: [3, 4] }] }, calls), 2);
+  assert.deepEqual(
+    await adapter.encode(['text'], { model: 'openrouter:chosen', batchSize: 32, query: true }),
+    [[3, 4]],
+  );
+  assert.equal(z.object({ input_type: z.string() }).parse(calls[0]?.body).input_type, 'query');
+  assert.equal(calls[0]?.url, 'https://openrouter.ai/api/v1/embeddings');
+});
+void test('transport deadlines abort without leaking request contents', async () => {
+  const http: typeof fetch = (_input, init) =>
+    new Promise((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(new Error('private response')), {
+        once: true,
+      });
+    });
+  await assert.rejects(
+    postJson({
+      url: 'https://offline.invalid',
+      provider: 'offline',
+      payload: {},
+      timeout: 0.001,
+      http,
+    }),
+    /offline request failed/u,
+  );
+});

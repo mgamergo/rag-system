@@ -4,10 +4,10 @@ import {
   nonBlank,
   positiveInteger,
   positiveNumber,
-} from '../domain/models.js';
-import type { RetrievedChunk } from '../domain/models.js';
-import type { HttpClient } from '../domain/ports.js';
-import { apiKey, HttpError, postJson } from '../infrastructure/http.js';
+} from '../domain/models.ts';
+import type { RetrievedChunk } from '../domain/models.ts';
+import type { HttpClient } from '../domain/ports.ts';
+import { apiKey, HttpError, postJson } from '../infrastructure/http.ts';
 
 export const UNKNOWN_ANSWER = "I don't know based on the supplied sources.";
 export const SYSTEM_PROMPT = `Answer the question using only the supplied sources.
@@ -42,12 +42,17 @@ export interface GenerationOptions {
   provider: z.infer<typeof generationProviderSchema>;
   model: string;
   apiKey?: string;
-  ollamaBaseUrl?: string;
   maxTokens?: number;
   timeout?: number;
   http?: HttpClient;
 }
+const usageSchema = z.object({
+  prompt_tokens: z.number().optional(),
+  completion_tokens: z.number().optional(),
+  total_tokens: z.number().optional(),
+});
 const responseSchema = z.object({
+  usage: usageSchema.optional(),
   choices: z
     .array(
       z.object({
@@ -58,6 +63,7 @@ const responseSchema = z.object({
     .nonempty(),
 });
 export class ChatGenerator {
+  usage: z.infer<typeof usageSchema> = {};
   private readonly url: string;
   private readonly key: string | undefined;
   private readonly maxTokens: number;
@@ -67,21 +73,8 @@ export class ChatGenerator {
     nonBlank.parse(options.model);
     this.maxTokens = positiveInteger.parse(options.maxTokens ?? 512);
     this.timeout = positiveNumber.parse(options.timeout ?? 120);
-    if (options.provider === 'openrouter') {
-      this.key = apiKey('OPENROUTER_API_KEY', options.apiKey);
-      this.url = 'https://openrouter.ai/api/v1/chat/completions';
-    } else {
-      const base = options.ollamaBaseUrl ?? 'http://localhost:11434/v1';
-      const parsed = new URL(base);
-      if (
-        !['http:', 'https:'].includes(parsed.protocol) ||
-        !parsed.hostname ||
-        parsed.search ||
-        parsed.hash
-      )
-        throw new Error('Ollama base URL must be an HTTP(S) URL without query or fragment');
-      this.url = base.replace(/\/+$/u, '') + '/chat/completions';
-    }
+    this.key = apiKey('OPENROUTER_API_KEY', options.apiKey);
+    this.url = 'https://openrouter.ai/api/v1/chat/completions';
   }
   async generate(question: string, sources: RetrievedChunk[]): Promise<string> {
     nonBlank.parse(question);
@@ -118,10 +111,11 @@ export class ChatGenerator {
     }
     const parsed = responseSchema.safeParse(data);
     if (!parsed.success) throw new Error(`${this.options.provider} returned no usable answer`);
+    this.usage = parsed.data.usage ?? {};
     const choice = parsed.data.choices[0];
     if (!choice) throw new Error(`${this.options.provider} returned no usable answer`);
     if (choice.finish_reason === 'length')
-      throw new Error('The answer hit the output limit. Increase --max-tokens');
+      throw new Error('The answer hit the output limit. Increase the answer token limit');
     if (!choice.message.content?.trim())
       throw new Error(`${this.options.provider} returned no usable answer`);
     return choice.message.content.trim();

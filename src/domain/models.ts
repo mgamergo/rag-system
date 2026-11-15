@@ -9,8 +9,8 @@ export const retrievalMethodSchema = z.enum(['semantic', 'bm25', 'tfidf', 'hybri
 export type RetrievalMethod = z.infer<typeof retrievalMethodSchema>;
 export const lexicalMethodSchema = z.enum(['bm25', 'tfidf']);
 export type LexicalMethod = z.infer<typeof lexicalMethodSchema>;
-export const rerankProviderSchema = z.enum(['local', 'cohere', 'voyage']);
-export const generationProviderSchema = z.enum(['openrouter', 'ollama']);
+export const rerankProviderSchema = z.enum(['cohere', 'voyage']);
+export const generationProviderSchema = z.enum(['openrouter']);
 
 // Serialized names are the artifact contract; internal code uses the same names.
 export const chunkSchema = z
@@ -65,3 +65,8 @@ export const characters = (text: string): string[] => Array.from(text);
 export const characterLength = (text: string): number => characters(text).length;
 export const characterSlice = (text: string, start: number, end?: number): string =>
   characters(text).slice(start, end).join('');
+
+export interface Corpus {
+  chunks: Chunk[];
+  embeddings: Embedding[];
+}

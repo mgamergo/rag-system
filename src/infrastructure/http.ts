@@ -1,5 +1,5 @@
-import type { HttpClient } from '../domain/ports.js';
-import { positiveNumber } from '../domain/models.js';
+import type { HttpClient } from '../domain/ports.ts';
+import { positiveNumber } from '../domain/models.ts';
 
 export class HttpError extends Error {
   constructor(

@@ -1,12 +1,8 @@
-import { embedQuery } from '../src/embeddings/encoder.js';
-
-const sentences = [
-  'TypeScript supports asynchronous programming.',
-  'The weather is sunny today.',
-  'Async and await allow asynchronous code in TypeScript.',
-];
-const embeddings = [];
-for (const sentence of sentences) embeddings.push(await embedQuery(sentence));
-process.stdout.write(
-  `Shape: (${embeddings.length}, ${embeddings[0]?.length ?? 0})\nDimensions: ${embeddings[0]?.length ?? 0}\n`,
-);
+// Offline contract smoke check. No model download or provider request.
+import assert from 'node:assert/strict';
+import { embedQuery } from '../src/embeddings/encoder.ts';
+const vector = await embedQuery('Example question', {
+  encoder: { encode: () => Promise.resolve([[1, 0]]) },
+});
+assert.deepEqual(vector, [1, 0]);
+process.stdout.write('Embedding adapter contract passed (offline).\n');
