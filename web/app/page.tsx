@@ -1,3 +1,5 @@
-import { RagWorkspace } from "../features/rag/RagWorkspace";
+import { RagWorkspace } from '../features/rag/RagWorkspace';
 
-export default function Page() { return <RagWorkspace />; }
+export default function Page() {
+  return <RagWorkspace />;
+}

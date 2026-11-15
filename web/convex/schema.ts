@@ -1,35 +1,58 @@
-import { defineSchema, defineTable } from "convex/server";
-import { v } from "convex/values";
-
+import { defineSchema, defineTable } from 'convex/server';
+import { v } from 'convex/values';
+const status = v.union(v.literal('indexing'), v.literal('ready'), v.literal('failed'));
 export default defineSchema({
   documents: defineTable({
     filename: v.string(),
     contentHash: v.string(),
-    status: v.union(v.literal("indexing"), v.literal("ready"), v.literal("failed")),
+    status,
     chunkCount: v.number(),
     error: v.optional(v.string()),
     createdAt: v.number(),
     indexedAt: v.optional(v.number()),
-  }).index("by_created_at", ["createdAt"]),
-
+    configHash: v.optional(v.string()),
+    configJson: v.optional(v.string()),
+    activeRun: v.optional(v.id('runs')),
+    chunkRun: v.optional(v.id('runs')),
+    pendingRun: v.optional(v.id('runs')),
+    embeddingModel: v.optional(v.string()),
+  })
+    .index('by_created_at', ['createdAt'])
+    .index('by_hash', ['contentHash', 'configHash']),
   chunks: defineTable({
-    documentId: v.id("documents"),
+    documentId: v.id('documents'),
     chunkIndex: v.number(),
     text: v.string(),
     startChar: v.number(),
     endChar: v.number(),
-    embedding: v.array(v.float64()),
-    embeddingModel: v.string(),
-    status: v.union(v.literal("indexing"), v.literal("ready")),
+    context: v.optional(v.string()),
+    engineId: v.optional(v.string()),
+    runId: v.optional(v.id('runs')),
+    embedding: v.optional(v.array(v.float64())),
+    embeddingModel: v.optional(v.string()),
+    status: v.optional(v.union(v.literal('indexing'), v.literal('ready'))),
     createdAt: v.number(),
   })
-    .index("by_document", ["documentId", "chunkIndex"])
-    .vectorIndex("by_embedding", {
-      vectorField: "embedding",
-      dimensions: 2048,
-      filterFields: ["documentId", "status"],
-    }),
-
+    .index('by_document', ['documentId', 'chunkIndex'])
+    .index('by_run', ['runId']),
+  vectors: defineTable({
+    runId: v.id('runs'),
+    documentId: v.id('documents'),
+    chunkId: v.string(),
+    model: v.string(),
+    embedding: v.array(v.float64()),
+  }).index('by_run', ['runId']),
+  runs: defineTable({
+    documentId: v.id('documents'),
+    kind: v.union(v.literal('ingest'), v.literal('reembed')),
+    name: v.string(),
+    status,
+    configJson: v.string(),
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+    usageJson: v.optional(v.string()),
+  }).index('by_created_at', ['createdAt']),
   traces: defineTable({
     question: v.string(),
     answer: v.string(),
@@ -41,7 +64,22 @@ export default defineSchema({
     promptTokens: v.optional(v.number()),
     completionTokens: v.optional(v.number()),
     totalTokens: v.optional(v.number()),
-    sourceChunkIds: v.array(v.id("chunks")),
+    sourceChunkIds: v.array(v.id('chunks')),
     createdAt: v.number(),
-  }).index("by_created_at", ["createdAt"]),
+    status: v.optional(v.union(v.literal('running'), v.literal('success'), v.literal('failed'))),
+    error: v.optional(v.string()),
+    configJson: v.optional(v.string()),
+    sourcesJson: v.optional(v.string()),
+  }).index('by_created_at', ['createdAt']),
+  evaluations: defineTable({
+    name: v.string(),
+    datasetJson: v.string(),
+    configJson: v.string(),
+    documentIds: v.array(v.id('documents')),
+    status: v.union(v.literal('running'), v.literal('success'), v.literal('failed')),
+    reportJson: v.optional(v.string()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+  }).index('by_created_at', ['createdAt']),
 });
