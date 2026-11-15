@@ -1,165 +1,100 @@
-# Contextual RAG
+# Field Notes RAG
 
-Ask questions about local Markdown and text documents with a TypeScript retrieval-augmented generation pipeline. Experiment with contextual indexing, semantic and lexical retrieval, rank fusion, reranking, and full-corpus prompts. The companion Next.js app uses Convex and OpenRouter.
+A Next.js + Convex workbench for contextual retrieval experiments. The browser is the only interface. Convex Node actions call one shared engine in `src/`; there is no ingestion, answering or evaluation CLI.
 
-## Get started
+## Run locally
 
-Install Node.js 22.13 or later, then run from the repository root:
-
-```powershell
-npm ci
-npm run ingest -- examples/notes.md --output-dir artifacts/demo
-ollama pull llama3.2:3b
-npm run ask -- "What are the two stages of RAG?" --artifact-dir artifacts/demo --provider ollama --model llama3.2:3b
-```
-
-Start the Ollama server before asking. Alternatively, set `OPENROUTER_API_KEY` in your process environment and use `--provider openrouter --model YOUR_PROVIDER/MODEL_ID`. Clients read environment variables directly and do not load `.env` files. Hosted requests send document text and metadata to providers and may incur charges.
-
-The CLI prints answers and numbered sources with paths, chunk indexes, character offsets, and scores. Prompts ask for citations and an unknown answer when evidence is insufficient. Those instructions do not guarantee factual accuracy or valid citations.
-
-## Repository boundaries
-
-```text
-src/
-  domain/          Shared records, runtime schemas, and inference ports
-  infrastructure/  HTTP transport, timeouts, and credential lookup
-  storage/         Validated JSONL and atomic file replacement
-  ingestion/       Discovery, decoding, chunking, and contextualization
-  embeddings/      Local ONNX and hosted embedding adapters
-  retrieval/       Semantic, lexical, fusion, full corpus, and reranking
-  generation/      Grounded prompts and chat provider adapter
-  evaluation/      Label validation and retrieval metrics
-  pipelines/       Ingestion and answering orchestration
-  cli/             Arguments, exit codes, and terminal output
-  index.ts         Reusable library entry point
-web/               Independent Next.js and Convex application
-examples/          Sample notes and embedding smoke test
-tests/             Behavioral tests and local HTTP integration
-docs/              Interactive architecture and code-flow guides
-artifacts/         Local indexes and reports, ignored by Git
-```
-
-Domain types have no I/O dependencies. Processing modules do not depend on orchestration or CLI code. Pipelines compose those modules. CLI modules translate arguments and present results. `Encoder`, `PairScorer`, `Contextualize`, and `HttpClient` separate processing from inference and external services. External JSON is validated with Zod before processing. The CLI and web app retain separate dependencies and storage.
-
-List source files with `rg --files src tests examples web`. See the [architecture guide](docs/architecture-overview.html) and [code flow](docs/code-flow.html).
-
-## Ingest documents
-
-```powershell
-npm run ingest -- "C:\path\to\documents" --output-dir artifacts/my-run --chunk-size 500 --overlap 50 --batch-size 32 --device cpu
-```
-
-Input is one UTF-8 `.txt` or `.md` file, or a directory scanned recursively. Discovery skips dependencies, caches, and Git metadata. Empty or unreadable documents are reported while valid documents continue. BOMs are removed and newlines normalized. Other file formats are unsupported.
-
-Sizes and offsets count Unicode code points, not tokens. Offsets refer to decoded, normalized text; the end is exclusive. Overlap must be nonnegative and less than chunk size. `--chunk-boundary` accepts `character`, `sentence`, or `paragraph`. Natural boundaries prefer the latter half of a window, with a hard size fallback. Models can truncate inputs at their token limit.
-
-Runs write three artifacts to `artifacts/run-<id>` or `--output-dir`:
-
-- `chunks.jsonl`: `chunk_id`, `document_id`, `chunk_index`, absolute `source`, original `text`, `start_char`, `end_char`, and generated `context`.
-- `embeddings.jsonl`: `chunk_id`, `model`, and `embedding`.
-- `failures.jsonl`: skipped document `source` and `error`.
-
-IDs are regenerated each run. Records without `context` load with an empty string. Embeddings join by `chunk_id`, independent of line order. Context generation and embedding finish before any replacement. Each artifact is replaced atomically; the three files are separate operations. Unrelated output files are retained. Empty input loads no model.
-
-The default embedding model ID is `sentence-transformers/all-MiniLM-L6-v2`, resolved to its `Xenova/all-MiniLM-L6-v2` ONNX counterpart. It returns normalized 384-dimensional vectors. The default reranker resolves `cross-encoder/ms-marco-MiniLM-L-6-v2` to `Xenova/ms-marco-MiniLM-L-6-v2`. Transformers.js runs full-precision local inference. First use downloads weights from Hugging Face; later calls use the cache. Custom IDs and directories must contain compatible ONNX models and tokenizers. CPU is supported. `--device cuda` or `webgpu` requires compatible hardware and runtime support. Local inference has no HTTP timeout.
-
-Hosted embeddings use `--model gemini:MODEL_ID` with `GEMINI_API_KEY`, or `--model voyage:MODEL_ID` with `VOYAGE_API_KEY`. The saved prefix selects the same model for queries. Requests distinguish query and document tasks, cap batches at 100 texts, and have a 120-second timeout. Provider input limits still apply.
-
-```powershell
-npm run embed-chunks -- artifacts/demo/chunks.jsonl --output artifacts/embeddings.jsonl
-npm run smoke:embeddings
-```
-
-## Add document context
-
-Set `ANTHROPIC_API_KEY`, then select an Anthropic model:
-
-```powershell
-npm run ingest -- examples/notes.md --output-dir artifacts/contextual --context-model YOUR_ANTHROPIC_MODEL_ID --chunk-boundary paragraph --chunk-size 1200 --overlap 100
-```
-
-Each request includes the whole document and one chunk. The instruction targets 50-100 tokens; the default output cap is 160. Context is stored separately from original text. Embedding and lexical search use context plus text. Generation receives separate context and text fields; original offsets remain exact.
-
-The shared document prefix has an Anthropic prompt-cache breakpoint. `--no-context-cache` disables it. Usage totals print after ingestion. Cache eligibility and expiry depend on the provider. `--context-prompt path/to/instruction.txt` replaces the instruction and requires `--context-model`. `--context-max-tokens` and `--context-timeout` control output and timeout. Context failure aborts before artifact replacement. Documents are not truncated to fit the model window.
-
-## Select retrieval and reranking
-
-```powershell
-npm run ask -- "Your question" --artifact-dir artifacts/contextual --model llama3.2:3b --retrieval-method hybrid --candidate-k 150 --top-k 20 --rerank-model
-```
-
-`--retrieval-method` accepts `semantic` by default, `bm25`, `tfidf`, or `hybrid`. Semantic search normalizes vectors and scores cosine similarity. It rejects missing or duplicate vectors, mixed models, invalid values, and inconsistent dimensions before query encoding. Re-ingest when changing models and keep the JSONL files from one run together.
-
-BM25 uses `k1=1.5`, `b=0.75`, and positive Robertson IDF. TF-IDF uses sublinear term frequency, smoothed IDF, and cosine similarity. The tokenizer keeps identifiers such as `TS-999` intact and ignores case. Lexical methods need no vector artifacts and omit zero-score matches. No matches returns an unknown answer without calling generation.
-
-Hybrid retrieval takes up to `candidate-k` results per branch and fuses ranks with constant 60. Its lexical branch defaults to BM25; `--lexical-method tfidf` changes it. `candidate-k` defaults to 150 and must be at least `top-k`. Answering defaults to `top-k=20`.
-
-`--rerank-model` enables the default local cross encoder. An optional ID selects another model. Retrieval overfetches candidates, then reranking selects final sources. For hosted reranking, set `COHERE_API_KEY` or `VOYAGE_API_KEY` and pass `--rerank-provider cohere` or `voyage` plus `--rerank-model MODEL_ID`. Provider errors fail the query.
-
-`--timeout` defaults to 120 seconds and applies separately to reranking and generation requests. `--max-tokens` defaults to 512; truncated answers are errors. `--ollama-base-url` defaults to `http://localhost:11434/v1` and must include the compatible API prefix. There are no automatic retries, conversation history, relevance thresholds, or token budgeting. Keep source sizes within model windows. Ranking scores are not correctness probabilities. Repeated queries reload indexes and models.
-
-## Send a small corpus in full
-
-```powershell
-npm run ask -- "Your question" --artifact-dir artifacts/demo --model llama3.2:3b --full-context --full-context-max-chars 100000
-```
-
-This reconstructs documents, removes overlap, and bypasses retrieval and query embeddings. It rejects invalid offsets, gaps, conflicting overlaps, and inconsistent sources. The default budget is 600,000 characters, which does not guarantee the model's token window is sufficient. Full context ignores `top-k` for source selection, cannot use reranking, and does not add generation prompt caching.
-
-## Evaluate retrieval
-
-Create UTF-8 JSONL with one question per line and exactly one nonempty relevance field:
-
-```json
-{"question":"What are the stages of RAG?","relevant_chunk_ids":["COPY_CHUNK_ID_FROM_INDEX"]}
-```
-
-Alternatively, `relevant_sources` accepts exact source strings from the index. Unknown labels fail evaluation. IDs change on re-ingestion; source labels can compare chunk sizes.
-
-```powershell
-npm run evaluate -- questions.jsonl --artifact-dir artifacts/contextual --methods semantic bm25 tfidf hybrid --top-k 5 10 20 --output artifacts/retrieval-eval.json
-```
-
-Add `--rerank-model MODEL_ID` and optionally `--rerank-provider cohere` or `voyage` to evaluate reranking. Reports contain macro recall@k, failure rate, hit rate, MRR, per-query retrieved IDs, and latency. Repeated chunks from a source count once for document recall. Evaluation never calls generation. Latency includes model loading and is not a warmed-service benchmark.
-
-## Call the library
-
-```typescript
-import { runRag } from './src/index.js';
-
-const result = await runRag('What are the two stages of RAG?', 'artifacts/demo', {
-  provider: 'ollama',
-  model: 'llama3.2:3b',
-});
-process.stdout.write(result.answer + '\n');
-```
-
-`runIngestion(path, options)` returns the output directory, counts, and document failures. `runRag(question, artifactDir, options)` returns the question, answer, and sources. `npm run build` emits JavaScript and declarations to `dist/`.
-
-## Run the web app
-
-The independent `web/` app stores documents, 2,048-dimensional vectors, and successful question traces in Convex. It uses semantic vector retrieval and OpenRouter answers. The CLI provides the additional retrieval experiments.
-
-From `web/`:
+Use Node.js 22.13 or later. Install the two dependency sets:
 
 ```powershell
 npm ci
-npx convex dev --configure new --once
+npm --prefix web ci
+cd web
+npx convex dev
+```
+
+On first use, select or create a Convex deployment. Keep `convex dev` running to synchronize backend edits. In a second terminal, set only the server keys needed for the selected providers, then start Next.js:
+
+```powershell
+cd web
 npx convex env set OPENROUTER_API_KEY
+# Optional providers:
+npx convex env set ANTHROPIC_API_KEY
+npx convex env set VOYAGE_API_KEY
+npx convex env set GEMINI_API_KEY
+npx convex env set COHERE_API_KEY
 npm run dev
 ```
 
-Convex setup writes `NEXT_PUBLIC_CONVEX_URL` to `web/.env.local` and generates bindings. Embeddings default to `nvidia/nemotron-3-embed-1b:free`. Answers default to `google/gemma-4-26b-a4b-it`; override with the Convex variable `GENERATION_MODEL`. Reindex when changing embedding models or dimensions. Uploads accept UTF-8 `.md` and `.txt` files up to 500,000 characters.
+Convex setup writes `NEXT_PUBLIC_CONVEX_URL` into `web/.env.local`. Provider keys belong on Convex, never in public browser variables. Uploads, questions and evaluation runs may incur provider charges. Tests and builds do not require inference keys or call paid APIs.
 
-## Verify changes
+## Workspace
+
+Upload UTF-8 `.md` or `.txt` files. Choose chunk size, overlap and character/sentence/paragraph boundaries. Optional contextual retrieval sends each whole document and chunk to an explicit Anthropic model. Customize the instruction, cache breakpoint, token cap and timeout. Original text, code-point offsets and generated context are stored separately.
+
+Embeddings use OpenRouter, Voyage or Gemini. Local ONNX models, CPU/GPU controls and localhost Ollama are replaced with hosted providers. Defaults preserve the old web embedding model; generation and retrieval controls preserve the old CLI numerical defaults. See [every option and its replacement](docs/option-mapping.md).
+
+Ask with semantic, BM25, TF-IDF or hybrid retrieval. Hybrid uses equal-weight RRF, constant 60 by default. Optional hosted Cohere/Voyage reranking overfetches candidateK then selects topK. Full-context mode reconstructs selected documents, removes overlap and bypasses query embeddings; it cannot use reranking. Select documents and the compatible embedding space. Sources show filename, zero-based chunk index, offsets, score, chunk ID, original text and separate generated context.
+
+Use a document's re-embed button to preserve its chunks/context while creating a new embedding run with the selected embedding settings. Downloads export chunks and active vectors as JSONL. Identical normalized content plus ingestion config reuses an existing ready/in-progress document; a changed config creates a new experiment. SHA-256 replaces the old collision-prone contentHash implementation.
+
+## Evaluations
+
+Open `/evals`, upload a JSONL gold set, select documents, methods, k values and optional reranking. Each row requires a question and exactly one nonempty relevance field:
+
+```json
+{"question":"What are the stages of RAG?","relevant_sources":["notes.md"]}
+```
+
+Alternatively use `relevant_chunk_ids` copied from exported chunks. Unknown labels fail. Filenames must match exactly; repeated filenames are ambiguous, so prefer chunk IDs. Runs save the gold set, config, immutable corpus run IDs, per-query results and aggregate recall@k, hit rate, MRR, 1-recall miss rate and latency. Per-query evaluation latency includes query embedding, scoring and reranking, but excludes the initial Convex snapshot load. Question trace total latency includes that load; its retrieval stage measures the shared engine only. This evaluates retrieval only, with no generated answers. Semantic query embeddings and reranking can still incur charges.
+
+## Architecture
+
+- `src/domain`: shared records, schemas, defaults and inference ports; no Convex/I/O imports.
+- `src/ingestion`, `embeddings`, `retrieval`, `generation`, `evaluation`: reusable processing and hosted adapters.
+- `src/pipelines`: compose those modules over corpus records, independent of persistence.
+- `web/convex/rag.ts`: Node actions, provider calls and SHA-256; no database writes directly.
+- `web/convex/documents.ts`: transactional mutations and paginated internal queries.
+- `web/convex/schema.ts`: documents, immutable chunks/vectors, indexing runs, success/failure traces and evaluation runs.
+- `web/features/rag`: shared form controls, workspace and evaluation view.
+
+Semantic search is exact cosine over a model-filtered Convex snapshot, matching the former CLI rather than the old approximate web vector search. BM25/TF-IDF rebuild statistics from stored context plus original text using the original formulas. There is no Convex full-text substitution. This is intended for bounded experiment corpora, not large-scale search.
+
+Each indexing/re-embedding operation stages an immutable run and activates it in one transaction. Failed runs never replace active evidence. Failed question traces are recorded too. The original full file is reconstructible from chunks, not saved as a blob. Legacy pre-migration documents remain stored but must be uploaded again to obtain manifests/new vectors; no destructive automatic migration runs.
+
+## Defaults and limits
+
+Shared source of truth: `src/domain/config.ts`.
+
+| Setting | Default |
+|---|---|
+| Chunk size / overlap / boundary | 500 / 50 code points / character |
+| Context / prompt caching / output | Off / on when enabled / 160 tokens |
+| Embedding provider/model | OpenRouter / nvidia/nemotron-3-embed-1b:free |
+| Embedding batch | 32; hosted cap 100 |
+| Retrieval / hybrid lexical | semantic / BM25 |
+| topK / candidateK / RRF constant | 20 / 150 / 60 |
+| Reranking | Off; Cohere selected; explicit model required |
+| Full context / character budget | Off / 600,000 |
+| Generation model / max output | google/gemma-4-26b-a4b-it / 512 tokens |
+| All request timeouts | 120 seconds, configurable up to 600 |
+| Evaluation methods / k | All four / 5, 10, 20 |
+
+Uploads are capped at 8 files/request, 500,000 code points/file and 10,000 chunks/document. Exact snapshots are capped at 10,000 chunks. Evals are capped at 200 questions. Convex runtime/storage limits still apply; long serial context/eval runs can exceed an action's deadline. These are synchronous actions, not resumable workers. Historical/failed staging data is retained; cleanup and interrupted-run recovery remain future work.
+
+Output truncation is an error. There are no automatic retries, input token-window fitting, citation verification, answer-quality graders or auth/tenant isolation. System prompts treat documents as untrusted data but are not an injection-proof boundary. Add access control before exposing the deployment to untrusted users.
+
+## Verify offline
 
 ```powershell
 npm run check
-npm --prefix web run lint
-npm --prefix web exec tsc -- --noEmit -p web/tsconfig.json
-npm --prefix web run build
+npm --prefix web run check
+# Or both:
+npm run check:all
 ```
 
-Tests use temporary files, controlled inference adapters, provider responses, and a real local HTTP server. They need no API keys, model downloads, or Ollama. `npm run smoke:embeddings` is a separate live local-model check.
+The root runs typecheck, lint, 44 engine/provider tests and compilation. Web runs typecheck, lint, Convex integration tests and a production build. Convex tests replace fetch with controlled offline responses. `npm run smoke:embeddings` is now an offline adapter-contract check, not a model download.
 
-All commands support `--help` without loading models. Exit status is `0` for success, `1` for processing errors or partial ingestion, and `2` for invalid CLI syntax.
+CI runs the same root/web checks on Node 22. The web build uses a non-network placeholder `NEXT_PUBLIC_CONVEX_URL` when no real deployment is configured. Builds do not deploy Convex. Deployment/codegen needs your selected project and is separate from these offline checks.
+
+See the [architecture guide](docs/architecture-overview.html), [flow guide](docs/code-flow.html), [change report](docs/change-report.html) and [logbook](docs/logbook.md).
