@@ -155,7 +155,7 @@ export function IngestionControls({
       <fieldset>
         <legend>Contextual retrieval</legend>
         <Toggle
-          label="Generate document-aware context with Anthropic"
+          label="Generate document-aware context"
           value={context.enabled}
           onChange={(enabled) =>
             onChange({
@@ -168,7 +168,29 @@ export function IngestionControls({
           <>
             <div className="fields">
               <label>
-                Anthropic model
+                Context provider
+                <select
+                  value={context.provider}
+                  onChange={(e) =>
+                    onChange({
+                      ...value,
+                      context: {
+                        ...context,
+                        provider: z
+                          .enum(['anthropic', 'openrouter', 'openai', 'gemini'])
+                          .parse(e.target.value),
+                        model: '',
+                      },
+                    })
+                  }
+                >
+                  {['anthropic', 'openrouter', 'openai', 'gemini'].map((p) => (
+                    <option key={p}>{p}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Context model
                 <input
                   required
                   value={context.model}
@@ -189,13 +211,15 @@ export function IngestionControls({
                 onChange={(timeout) => onChange({ ...value, context: { ...context, timeout } })}
               />
             </div>
-            <Toggle
-              label="Cache shared document prefix"
-              value={context.cacheDocument}
-              onChange={(cacheDocument) =>
-                onChange({ ...value, context: { ...context, cacheDocument } })
-              }
-            />
+            {context.provider === 'anthropic' && (
+              <Toggle
+                label="Cache shared document prefix"
+                value={context.cacheDocument}
+                onChange={(cacheDocument) =>
+                  onChange({ ...value, context: { ...context, cacheDocument } })
+                }
+              />
+            )}
             <label>
               Custom instruction (optional)
               <textarea
@@ -311,7 +335,11 @@ export function RetrievalControls({
                 onChange={(e) =>
                   onChange({
                     ...value,
-                    rerank: { ...r, provider: rerankProviderSchema.parse(e.target.value) },
+                    rerank: {
+                      ...r,
+                      provider: rerankProviderSchema.parse(e.target.value),
+                      model: '',
+                    },
                   })
                 }
               >

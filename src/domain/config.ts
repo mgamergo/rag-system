@@ -24,6 +24,7 @@ export const ingestionConfigSchema = z
     context: z
       .object({
         enabled: z.boolean().default(false),
+        provider: z.enum(['anthropic', 'openrouter', 'openai', 'gemini']).default('anthropic'),
         model: z.string().default(''),
         instruction: z.string().default(''),
         maxTokens: positiveInteger.default(160),

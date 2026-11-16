@@ -272,11 +272,19 @@ void test('injected pair scorer sees contextual text and reranks before selectin
       rerank('q', candidates, { scorer: { score: () => Promise.resolve(scores) } }),
     );
 });
-for (const provider of ['cohere', 'voyage'] as const)
+for (const provider of ['cohere', 'voyage', 'openrouter'] as const)
   void test(`${provider} reranking preserves index mapping and top limit`, async (t) => {
-    environment(t, provider === 'cohere' ? 'COHERE_API_KEY' : 'VOYAGE_API_KEY', 'fake');
+    environment(
+      t,
+      provider === 'cohere'
+        ? 'COHERE_API_KEY'
+        : provider === 'voyage'
+          ? 'VOYAGE_API_KEY'
+          : 'OPENROUTER_API_KEY',
+      'fake',
+    );
     const calls: Parameters<typeof fakeHttp>[1] = [];
-    const field = provider === 'cohere' ? 'results' : 'data';
+    const field = provider === 'voyage' ? 'data' : 'results';
     const results = await rerank('q', candidates, {
       provider,
       model: 'chosen',
@@ -287,7 +295,7 @@ for (const provider of ['cohere', 'voyage'] as const)
     const body = z
       .object({ top_n: z.number().optional(), top_k: z.number().optional() })
       .parse(calls[0]?.body);
-    assert.equal(provider === 'cohere' ? body.top_n : body.top_k, 1);
+    assert.equal(provider === 'voyage' ? body.top_k : body.top_n, 1);
     for (const records of [
       [{ index: 7, relevance_score: 1 }],
       [{ index: 0, relevance_score: null }],
@@ -332,3 +340,72 @@ void test('transport deadlines abort without leaking request contents', async ()
     /offline request failed/u,
   );
 });
+
+for (const provider of ['openrouter', 'openai', 'gemini'] as const) {
+  void test(`${provider} contextualization routes arbitrary model names and maps usage`, async (t) => {
+    const settings = {
+      openrouter: {
+        key: 'OPENROUTER_API_KEY',
+        url: 'https://openrouter.ai/api/v1/chat/completions',
+      },
+      openai: { key: 'OPENAI_API_KEY', url: 'https://api.openai.com/v1/chat/completions' },
+      gemini: {
+        key: 'GEMINI_API_KEY',
+        url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+      },
+    };
+    environment(t, settings[provider].key, 'fake');
+    const calls: Parameters<typeof fakeHttp>[1] = [];
+    const client = new Contextualizer({
+      provider,
+      model: 'my/model',
+      instruction: 'Only context',
+      http: fakeHttp(
+        {
+          choices: [{ finish_reason: 'stop', message: { content: ' Context ' } }],
+          usage: { prompt_tokens: 12, completion_tokens: 3 },
+        },
+        calls,
+      ),
+    });
+    assert.equal(await client.contextualize('whole', 'chunk'), 'Context');
+    const call = calls[0];
+    assert.ok(call);
+    assert.equal(call.url, settings[provider].url);
+    assert.equal(call.headers.get('authorization'), 'Bearer fake');
+    const body = z
+      .object({
+        model: z.string(),
+        messages: z.array(z.object({ content: z.string() })),
+        max_tokens: z.number().optional(),
+        max_completion_tokens: z.number().optional(),
+      })
+      .parse(call.body);
+    assert.equal(body.model, 'my/model');
+    if (provider === 'openai') {
+      assert.equal(body.max_completion_tokens, 160);
+      assert.equal(body.max_tokens, undefined);
+    } else {
+      assert.equal(body.max_tokens, 160);
+      assert.equal(body.max_completion_tokens, undefined);
+    }
+    assert.deepEqual(JSON.parse(body.messages[1]?.content ?? '{}'), {
+      document: 'whole',
+      chunk: 'chunk',
+      instruction: 'Only context',
+    });
+    assert.equal(client.usage.input_tokens, 12);
+    assert.equal(client.usage.output_tokens, 3);
+    for (const response of [
+      { choices: [] },
+      { choices: [{ message: { content: ' ' } }] },
+      { choices: [{ finish_reason: 'length', message: { content: 'partial' } }] },
+    ])
+      await assert.rejects(
+        new Contextualizer({ provider, model: 'm', http: fakeHttp(response) }).contextualize(
+          'd',
+          'c',
+        ),
+      );
+  });
+}

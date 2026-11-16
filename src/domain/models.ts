@@ -9,7 +9,7 @@ export const retrievalMethodSchema = z.enum(['semantic', 'bm25', 'tfidf', 'hybri
 export type RetrievalMethod = z.infer<typeof retrievalMethodSchema>;
 export const lexicalMethodSchema = z.enum(['bm25', 'tfidf']);
 export type LexicalMethod = z.infer<typeof lexicalMethodSchema>;
-export const rerankProviderSchema = z.enum(['cohere', 'voyage']);
+export const rerankProviderSchema = z.enum(['cohere', 'voyage', 'openrouter']);
 export const generationProviderSchema = z.enum(['openrouter']);
 
 // Serialized names are the artifact contract; internal code uses the same names.

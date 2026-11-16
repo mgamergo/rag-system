@@ -53,22 +53,24 @@ export async function rerank(
       url:
         provider === 'cohere'
           ? 'https://api.cohere.com/v2/rerank'
-          : 'https://api.voyageai.com/v1/rerank',
+          : provider === 'voyage'
+            ? 'https://api.voyageai.com/v1/rerank'
+            : 'https://openrouter.ai/api/v1/rerank',
       provider,
       timeout,
       ...(options.http ? { http: options.http } : {}),
       headers: {
-        Authorization: `Bearer ${apiKey(provider === 'cohere' ? 'COHERE_API_KEY' : 'VOYAGE_API_KEY')}`,
+        Authorization: `Bearer ${apiKey(provider === 'cohere' ? 'COHERE_API_KEY' : provider === 'voyage' ? 'VOYAGE_API_KEY' : 'OPENROUTER_API_KEY')}`,
       },
       payload: {
         model,
         query: question,
         documents: texts,
-        [provider === 'cohere' ? 'top_n' : 'top_k']: Math.min(topK, texts.length),
+        [provider === 'voyage' ? 'top_k' : 'top_n']: Math.min(topK, texts.length),
       },
     });
     records =
-      provider === 'cohere'
+      provider !== 'voyage'
         ? z.object({ results: z.array(recordSchema) }).parse(data).results
         : z.object({ data: z.array(recordSchema) }).parse(data).data;
     if (records.length !== Math.min(topK, texts.length))

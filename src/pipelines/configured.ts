@@ -39,6 +39,7 @@ export async function ingestConfigured(
 ) {
   const contextualizer = config.context.enabled
     ? new Contextualizer({
+        provider: config.context.provider,
         model: config.context.model,
         maxTokens: config.context.maxTokens,
         timeout: config.context.timeout,

@@ -18,6 +18,14 @@ export const ingestion = v.object({
   embedding,
   context: v.object({
     enabled: v.boolean(),
+    provider: v.optional(
+      v.union(
+        v.literal('anthropic'),
+        v.literal('openrouter'),
+        v.literal('openai'),
+        v.literal('gemini'),
+      ),
+    ),
     model: v.string(),
     instruction: v.string(),
     maxTokens: v.number(),
@@ -35,7 +43,7 @@ export const ask = v.object({
   timeout: v.number(),
   rerank: v.object({
     enabled: v.boolean(),
-    provider: v.union(v.literal('cohere'), v.literal('voyage')),
+    provider: v.union(v.literal('cohere'), v.literal('voyage'), v.literal('openrouter')),
     model: v.string(),
   }),
   fullContext: v.boolean(),
