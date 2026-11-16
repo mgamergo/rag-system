@@ -9,7 +9,9 @@
  */
 
 import type * as documents from "../documents.js";
+import type * as projects from "../projects.js";
 import type * as rag from "../rag.js";
+import type * as validators from "../validators.js";
 
 import type {
   ApiFromModules,
@@ -19,7 +21,9 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   documents: typeof documents;
+  projects: typeof projects;
   rag: typeof rag;
+  validators: typeof validators;
 }>;
 
 /**

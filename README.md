@@ -30,13 +30,15 @@ Convex setup writes `NEXT_PUBLIC_CONVEX_URL` into `web/.env.local`. Provider key
 
 ## Workspace
 
-Upload UTF-8 `.md` or `.txt` files. Choose chunk size, overlap and character/sentence/paragraph boundaries. Optional contextual retrieval sends each whole document and chunk to an explicit Anthropic model. Customize the instruction, cache breakpoint, token cap and timeout. Original text, code-point offsets and generated context are stored separately.
+Create a project from the sidebar. Each project has Chat, Documents, and Settings screens, saved ingestion and retrieval defaults, and persistent question history. Add documents on the Documents screen. Configure chunking and provider models in Settings. Previous-library documents remain unassigned until you import them into a project.
+
+Upload UTF-8 `.md` or `.txt` files. Choose chunk size, overlap and character/sentence/paragraph boundaries. Optional contextual retrieval sends each whole document and chunk to an explicit Anthropic, OpenRouter, OpenAI, or Gemini model. Customize the instruction, cache breakpoint, token cap and timeout. Original text, code-point offsets and generated context are stored separately.
 
 Embeddings use OpenRouter, Voyage or Gemini. Local ONNX models, CPU/GPU controls and localhost Ollama are replaced with hosted providers. Defaults preserve the old web embedding model; generation and retrieval controls preserve the old CLI numerical defaults. See [every option and its replacement](docs/option-mapping.md).
 
-Ask with semantic, BM25, TF-IDF or hybrid retrieval. Hybrid uses equal-weight RRF, constant 60 by default. Optional hosted Cohere/Voyage reranking overfetches candidateK then selects topK. Full-context mode reconstructs selected documents, removes overlap and bypasses query embeddings; it cannot use reranking. Select documents and the compatible embedding space. Sources show filename, zero-based chunk index, offsets, score, chunk ID, original text and separate generated context.
+Ask with semantic, BM25, TF-IDF or hybrid retrieval. Hybrid uses equal-weight RRF, constant 60 by default. Optional hosted Cohere, Voyage, or OpenRouter reranking overfetches candidateK then selects topK. Full-context mode reconstructs selected documents, removes overlap and bypasses query embeddings; it cannot use reranking. Select documents and the compatible embedding space. Sources show filename, zero-based chunk index, offsets, score, chunk ID, original text and separate generated context.
 
-Use a document's re-embed button to preserve its chunks/context while creating a new embedding run with the selected embedding settings. Downloads export chunks and active vectors as JSONL. Identical normalized content plus ingestion config reuses an existing ready/in-progress document; a changed config creates a new experiment. SHA-256 replaces the old collision-prone contentHash implementation.
+Use a document's re-embed button to preserve its chunks/context while creating a new embedding run with the selected embedding settings. Downloads export chunks and active vectors as JSONL. Within a project, identical normalized content plus ingestion config reuses an existing ready/in-progress document; a changed config creates a new experiment. SHA-256 replaces the old collision-prone contentHash implementation.
 
 ## Evaluations
 
@@ -98,3 +100,16 @@ The root runs typecheck, lint, 44 engine/provider tests and compilation. Web run
 CI runs the same root/web checks on Node 22. The web build uses a non-network placeholder `NEXT_PUBLIC_CONVEX_URL` when no real deployment is configured. Builds do not deploy Convex. Deployment/codegen needs your selected project and is separate from these offline checks.
 
 See the [architecture guide](docs/architecture-overview.html), [flow guide](docs/code-flow.html), [change report](docs/change-report.html) and [logbook](docs/logbook.md).
+
+
+## Project ownership
+
+`web/convex/projects.ts` owns project creation, saved settings, and explicit imports from the previous library. Documents belong to one project. Traces store the project ID so chat history survives navigation and reloads. Chunks, vectors, and indexing runs inherit ownership through their document.
+
+The UI calls ingestion and retrieval with a project ID. `documents.selection` enforces membership before loading chunks or scoring. An empty document selection searches only that project's ready documents. Calls without a project ID use only the unassigned previous library. Deduplication is scoped to a project, even when content and configuration match another project's upload.
+
+A shared document library with many-to-many project membership was considered. Single-project ownership keeps deduplication, indexing versions, and chat evidence consistent without a second membership model. Projects organize this existing shared workspace; they do not introduce user authentication or per-user access control.
+
+Project settings affect future uploads and questions. Existing ingestion manifests remain immutable. Use re-embedding to change a document's embedding space, or upload again to change chunking. Retrieval embedding settings must match the documents for semantic or hybrid search. Each chat entry is an independent grounded question; preceding messages are displayed but are not sent as conversational context.
+
+OpenRouter contextualization accepts chat model IDs through `/api/v1/chat/completions`. Native OpenRouter reranking uses `/api/v1/rerank` with a rerank model ID, such as `cohere/rerank-v3.5`, rather than a chat model. See the [OpenRouter RAG guide](https://openrouter.ai/docs/cookbook/evaluate-and-optimize/rag). Direct context providers use `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`; OpenRouter uses `OPENROUTER_API_KEY`. Explicit document-prefix caching applies only to direct Anthropic calls.

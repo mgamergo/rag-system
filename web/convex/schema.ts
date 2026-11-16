@@ -1,8 +1,16 @@
 import { defineSchema, defineTable } from 'convex/server';
 import { v } from 'convex/values';
+import { ingestion, ask } from './validators';
 const status = v.union(v.literal('indexing'), v.literal('ready'), v.literal('failed'));
 export default defineSchema({
+  projects: defineTable({
+    name: v.string(),
+    ingestion,
+    retrieval: ask,
+    createdAt: v.number(),
+  }),
   documents: defineTable({
+    projectId: v.optional(v.id('projects')),
     filename: v.string(),
     contentHash: v.string(),
     status,
@@ -18,7 +26,8 @@ export default defineSchema({
     embeddingModel: v.optional(v.string()),
   })
     .index('by_created_at', ['createdAt'])
-    .index('by_hash', ['contentHash', 'configHash']),
+    .index('by_hash', ['contentHash', 'configHash'])
+    .index('by_project', ['projectId', 'createdAt']),
   chunks: defineTable({
     documentId: v.id('documents'),
     chunkIndex: v.number(),
@@ -54,6 +63,7 @@ export default defineSchema({
     usageJson: v.optional(v.string()),
   }).index('by_created_at', ['createdAt']),
   traces: defineTable({
+    projectId: v.optional(v.id('projects')),
     question: v.string(),
     answer: v.string(),
     generationModel: v.string(),
@@ -70,8 +80,11 @@ export default defineSchema({
     error: v.optional(v.string()),
     configJson: v.optional(v.string()),
     sourcesJson: v.optional(v.string()),
-  }).index('by_created_at', ['createdAt']),
+  })
+    .index('by_created_at', ['createdAt'])
+    .index('by_project', ['projectId', 'createdAt']),
   evaluations: defineTable({
+    projectId: v.optional(v.id('projects')),
     name: v.string(),
     datasetJson: v.string(),
     configJson: v.string(),

@@ -4,9 +4,13 @@ import { paginationOptsValidator } from 'convex/server';
 import { internalMutation, internalQuery, query } from './_generated/server';
 
 export const list = query({
-  args: {},
-  handler: async (ctx) =>
-    await ctx.db.query('documents').withIndex('by_created_at').order('desc').collect(),
+  args: { projectId: v.optional(v.id('projects')) },
+  handler: async (ctx, args) =>
+    await ctx.db
+      .query('documents')
+      .withIndex('by_project', (q) => q.eq('projectId', args.projectId))
+      .order('desc')
+      .collect(),
 });
 export const runs = query({
   args: {},
@@ -14,17 +18,27 @@ export const runs = query({
     await ctx.db.query('runs').withIndex('by_created_at').order('desc').take(100),
 });
 export const traces = query({
-  args: {},
-  handler: async (ctx) =>
-    await ctx.db.query('traces').withIndex('by_created_at').order('desc').take(50),
+  args: { projectId: v.optional(v.id('projects')) },
+  handler: async (ctx, args) =>
+    await ctx.db
+      .query('traces')
+      .withIndex('by_project', (q) => q.eq('projectId', args.projectId))
+      .order('asc')
+      .collect(),
 });
 export const evaluations = query({
-  args: {},
-  handler: async (ctx) =>
-    await ctx.db.query('evaluations').withIndex('by_created_at').order('desc').take(50),
+  args: { projectId: v.optional(v.id('projects')) },
+  handler: async (ctx, args) =>
+    await ctx.db
+      .query('evaluations')
+      .withIndex('by_created_at')
+      .filter((q) => q.eq(q.field('projectId'), args.projectId))
+      .order('desc')
+      .take(50),
 });
 export const reserve = internalMutation({
   args: {
+    projectId: v.optional(v.id('projects')),
     filename: v.string(),
     contentHash: v.string(),
     configHash: v.string(),
@@ -33,13 +47,14 @@ export const reserve = internalMutation({
     model: v.string(),
   },
   handler: async (ctx, args) => {
+    if (args.projectId && !(await ctx.db.get(args.projectId))) throw new Error('Project not found');
     const matches = await ctx.db
       .query('documents')
       .withIndex('by_hash', (q) =>
         q.eq('contentHash', args.contentHash).eq('configHash', args.configHash),
       )
       .collect();
-    const existing = matches.find((d) => d.status !== 'failed');
+    const existing = matches.find((d) => d.projectId === args.projectId && d.status !== 'failed');
     if (existing)
       return {
         documentId: existing._id,
@@ -47,6 +62,7 @@ export const reserve = internalMutation({
         reused: true,
       };
     const documentId = await ctx.db.insert('documents', {
+      projectId: args.projectId,
       filename: args.filename,
       contentHash: args.contentHash,
       configHash: args.configHash,
@@ -176,14 +192,21 @@ export const finish = internalMutation({
 });
 export const selection = internalQuery({
   args: {
+    projectId: v.optional(v.id('projects')),
     documentIds: v.array(v.id('documents')),
     model: v.optional(v.string()),
     allModels: v.boolean(),
   },
   handler: async (ctx, args) => {
+    if (args.projectId && !(await ctx.db.get(args.projectId))) throw new Error('Project not found');
     const all = args.documentIds.length
       ? await Promise.all(args.documentIds.map((id) => ctx.db.get(id)))
-      : await ctx.db.query('documents').withIndex('by_created_at').collect();
+      : await ctx.db
+          .query('documents')
+          .withIndex('by_project', (q) => q.eq('projectId', args.projectId))
+          .collect();
+    if (all.some((d) => d && d.projectId !== args.projectId))
+      throw new Error('Document does not belong to this project');
     if (args.documentIds.length && all.some((d) => !d || d.status !== 'ready' || !d.activeRun))
       throw new Error('Selected documents must be ready and have a shared-engine manifest');
     const ready = all.flatMap((d) =>
@@ -218,6 +241,7 @@ export const vectorPage = internalQuery({
 });
 export const startTrace = internalMutation({
   args: {
+    projectId: v.optional(v.id('projects')),
     question: v.string(),
     configJson: v.string(),
     model: v.string(),
@@ -225,6 +249,7 @@ export const startTrace = internalMutation({
   },
   handler: async (ctx, args) =>
     await ctx.db.insert('traces', {
+      projectId: args.projectId,
       question: args.question,
       answer: '',
       configJson: args.configJson,
@@ -271,6 +296,7 @@ export const endTrace = internalMutation({
 });
 export const startEvaluation = internalMutation({
   args: {
+    projectId: v.optional(v.id('projects')),
     name: v.string(),
     datasetJson: v.string(),
     configJson: v.string(),

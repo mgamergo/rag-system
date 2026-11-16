@@ -1,32 +1,22 @@
 'use client';
-
 import Link from 'next/link';
-
-import { useAction, useQuery } from 'convex/react';
-
-import { useState } from 'react';
-
+import { useParams, useRouter } from 'next/navigation';
+import { useAction, useMutation, useQuery } from 'convex/react';
+import { useEffect, useRef, useState } from 'react';
+import { Markdown } from './Markdown';
+import { z } from 'zod';
 import { api } from '../../convex/_generated/api';
-
-import type { Id } from '../../convex/_generated/dataModel';
-
-import {
-  DEFAULT_ASK,
-  DEFAULT_INGESTION,
-  askConfigSchema,
-  embeddingConfigSchema,
-  embeddingKey,
-  ingestionConfigSchema,
-} from '../../../src/domain/config';
-
+import type { Doc } from '../../convex/_generated/dataModel';
+import { askConfigSchema, embeddingKey, ingestionConfigSchema } from '../../../src/domain/config';
+import { chunkSchema } from '../../../src/domain/models';
 import { decodeDocument } from '../../../src/ingestion/documents';
-
 import { EmbeddingControls, IngestionControls, NumberField, RetrievalControls } from './Controls';
 
-import type { FunctionReturnType } from 'convex/server';
-
 const errorText = (e: unknown) => (e instanceof Error ? e.message : 'Request failed');
-
+type View = 'chat' | 'documents' | 'settings';
+const evidenceSchema = z.object({
+  sources: z.array(z.object({ chunk: chunkSchema, score: z.number() })),
+});
 export function download(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
   const a = document.createElement('a');
@@ -35,356 +25,591 @@ export function download(name: string, text: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+export function RagWorkspace({ view = 'chat' }: { view?: View }) {
+  const projects = useQuery(api.projects.list);
+  const create = useMutation(api.projects.create);
+  const router = useRouter();
+  const params = useParams();
+  const project = projects?.find((p) => p._id === params.projectId);
+  const [creating, setCreating] = useState(false);
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="project-app">
+      <aside className="project-sidebar">
+        <Link className="brand" href="/">
+          <span className="brand-mark" aria-hidden="true">
+            ⌑
+          </span>{' '}
+          Field Notes
+        </Link>
+        <div className="sidebar-label">
+          <span>Your projects</span>
+          <button
+            className="icon-button"
+            aria-label="Create project"
+            onClick={() => setCreating(true)}
+          >
+            +
+          </button>
+        </div>
+        {projects === undefined && <p className="hint">Loading projects…</p>}
+        <nav className="project-list" aria-label="Projects">
+          {projects?.map((p) => (
+            <Link
+              key={p._id}
+              href={`/projects/${p._id}`}
+              aria-current={p._id === project?._id ? 'page' : undefined}
+            >
+              <span aria-hidden="true">▧</span>
+              {p.name}
+            </Link>
+          ))}
+        </nav>
+        <button className="secondary new-project" onClick={() => setCreating(true)}>
+          + New project
+        </button>
+        <Link className="sidebar-footer" href="/evals">
+          Retrieval evaluations
+        </Link>
+      </aside>
+      <main className="project-main">
+        {creating ? (
+          <div className="welcome narrow">
+            <h1>A space for your research.</h1>
+            <p>Keep related documents and conversations together.</p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                setBusy(true);
+                setError('');
+                void create({ name })
+                  .then((id) => {
+                    setCreating(false);
+                    setName('');
+                    router.push(`/projects/${id}`);
+                  })
+                  .catch((e) => setError(errorText(e)))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              <label>
+                Project name
+                <input
+                  autoFocus
+                  required
+                  maxLength={100}
+                  placeholder="e.g. Climate research"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </label>
+              {error && (
+                <p role="alert" className="error">
+                  {error}
+                </p>
+              )}
+              <button disabled={busy || !name.trim()}>
+                {busy ? 'Creating…' : 'Create project'}
+              </button>
+              <button type="button" className="secondary" onClick={() => setCreating(false)}>
+                Cancel
+              </button>
+            </form>
+          </div>
+        ) : project ? (
+          <ProjectWorkspace key={project._id} project={project} view={view} />
+        ) : (
+          <div className="welcome">
+            <span className="empty-mark" aria-hidden="true">
+              ⌑
+            </span>
+            <h1>
+              Your documents.
+              <br />
+              Room to think.
+            </h1>
+            <p>
+              {projects === undefined
+                ? 'Loading your workspace…'
+                : params.projectId
+                  ? 'This project could not be found. Choose a project or create one.'
+                  : 'Create a project, add your sources, and ask better questions.'}
+            </p>
+            <button onClick={() => setCreating(true)}>Create a project</button>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
 
-export function RagWorkspace() {
-  const docs = useQuery(api.documents.list) ?? [];
-  const runs = useQuery(api.documents.runs) ?? [];
-  const traces = useQuery(api.documents.traces) ?? [];
-
+function ProjectWorkspace({ project, view }: { project: Doc<'projects'>; view: View }) {
+  const root = `/projects/${project._id}`;
+  const docs = useQuery(api.documents.list, { projectId: project._id });
+  const traces = useQuery(api.documents.traces, { projectId: project._id });
+  const legacy = useQuery(api.documents.list, view === 'documents' ? {} : 'skip');
   const ingest = useAction(api.rag.ingest);
   const ask = useAction(api.rag.ask);
   const reembed = useAction(api.rag.reembed);
   const exportDoc = useAction(api.rag.exportDocument);
-
-  const [ingestion, setIngestion] = useState(DEFAULT_INGESTION);
-  const [config, setConfig] = useState(DEFAULT_ASK);
-
+  const save = useMutation(api.projects.saveSettings);
+  const importDoc = useMutation(api.projects.importDocument);
+  const [ingestion, setIngestion] = useState(() => ingestionConfigSchema.parse(project.ingestion));
+  const [retrieval, setRetrieval] = useState(() => askConfigSchema.parse(project.retrieval));
+  const [settingsTab, setSettingsTab] = useState<'ingestion' | 'retrieval'>('ingestion');
   const [files, setFiles] = useState<File[]>([]);
-  const [runName, setRunName] = useState('');
-  const [selected, setSelected] = useState<Id<'documents'>[]>([]);
-
   const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState<FunctionReturnType<typeof api.rag.ask> | null>(null);
-
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState('');
-
+  const [failed, setFailed] = useState(false);
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (view === 'chat') end.current?.scrollIntoView({ block: 'end' });
+  }, [traces?.length, view]);
+  const ready = docs?.filter((d) => d.status === 'ready' && d.activeRun) ?? [];
   async function perform(label: string, fn: () => Promise<void>) {
     setBusy(label);
     setNotice('');
+    setFailed(false);
     try {
       await fn();
     } catch (e) {
       setNotice(errorText(e));
+      setFailed(true);
     } finally {
       setBusy('');
     }
   }
-
-  const ready = docs.filter((d) => d.status === 'ready' && d.activeRun);
-
   return (
-    <main className="shell">
-      <header className="masthead">
+    <>
+      <header className="project-header">
         <div>
-          <h1>Field Notes</h1>
-          <p>Retrieval workbench</p>
+          <p className="breadcrumb">Projects / {project.name}</p>
+          <h1>{project.name}</h1>
         </div>
-        <nav>
-          <Link href="/">Workspace</Link>
-          <Link href="/evals">Evaluations</Link>
-        </nav>
+        <Link className="button secondary" href={`${root}/documents`}>
+          + Add documents
+        </Link>
       </header>
-      <p>
-        Index documents, inspect retrieval evidence and compare configurations. All runs are saved
-        in Convex.
-      </p>
+      <nav className="workspace-tabs" aria-label="Project views">
+        {(['chat', 'documents', 'settings'] satisfies View[]).map((v) => (
+          <Link
+            key={v}
+            aria-current={view === v ? 'page' : undefined}
+            href={v === 'chat' ? root : `${root}/${v}`}
+          >
+            {v === 'chat' ? 'Chat' : v === 'documents' ? 'Documents' : 'Settings'}
+            {v === 'documents' && docs && <span className="count">{docs.length}</span>}
+          </Link>
+        ))}
+      </nav>
       {notice && (
-        <p role="status" className="notice">
+        <div className={`notice ${failed ? 'error' : ''}`} role={failed ? 'alert' : 'status'}>
           {notice}
-        </p>
+        </div>
       )}
-
-      <div className="workbench">
-        <aside>
-          <h2>Library</h2>
-          <p className="hint">
-            No boxes selected means all ready documents. Semantic and hybrid search use only the
-            selected embedding space.
-          </p>
-          {docs.map((d) => (
-            <div key={d._id} className="document">
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  disabled={!d.activeRun || d.status !== 'ready'}
-                  checked={selected.includes(d._id)}
-                  onChange={(e) =>
-                    setSelected(
-                      e.target.checked
-                        ? [...selected, d._id]
-                        : selected.filter((id) => id !== d._id),
-                    )
-                  }
-                />
-                {d.filename}
+      {view === 'chat' && (
+        <div className="chat-layout">
+          <div className="conversation" aria-label="Project conversation">
+            {traces === undefined ? (
+              <p className="hint">Loading conversation…</p>
+            ) : (
+              !traces.length && (
+                <div className="chat-empty">
+                  <span className="empty-mark" aria-hidden="true">
+                    ⌑
+                  </span>
+                  <h2>What would you like to know?</h2>
+                  <p>
+                    {ready.length
+                      ? `Ask a question across ${ready.length} indexed document${ready.length === 1 ? '' : 's'} in ${project.name}. Answers include the sources behind them.`
+                      : 'Add your first document to start a conversation grounded in your sources.'}
+                  </p>
+                  {!ready.length && (
+                    <Link className="button" href={`${root}/documents`}>
+                      Add your first document
+                    </Link>
+                  )}
+                  {ready.length > 0 && (
+                    <div className="suggestions">
+                      {[
+                        'Summarize the main ideas in these documents.',
+                        'What are the key findings?',
+                      ].map((q) => (
+                        <button className="secondary" key={q} onClick={() => setQuestion(q)}>
+                          {q}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+            {traces?.map((t) => {
+              const evidence = evidenceSchema.safeParse(JSON.parse(t.sourcesJson || '{}'));
+              return (
+                <article className="chat-turn" key={t._id}>
+                  <div className="user-message">
+                    <span className="message-label">You</span>
+                    <p>{t.question}</p>
+                  </div>
+                  <div className="assistant-message">
+                    <span className="message-label">Field Notes</span>
+                    {t.status === 'running' ? (
+                      <p role="status" className="thinking">
+                        Searching your documents…
+                      </p>
+                    ) : t.status === 'failed' ? (
+                      <p className="error">{t.error}</p>
+                    ) : (
+                      <Markdown text={t.answer} />
+                    )}
+                    {evidence.success && evidence.data.sources.length > 0 && (
+                      <details className="evidence">
+                        <summary>{evidence.data.sources.length} sources · View evidence</summary>
+                        <div className="source-list">
+                          {evidence.data.sources.map(({ chunk }, i) => (
+                            <details key={chunk.chunk_id}>
+                              <summary>
+                                [{i + 1}] {chunk.source}{' '}
+                                <span className="hint">Chunk {chunk.chunk_index + 1}</span>
+                              </summary>
+                              <p className="source-text">{chunk.text}</p>
+                              {chunk.context && (
+                                <blockquote>
+                                  <small>Generated retrieval context</small>
+                                  {chunk.context}
+                                </blockquote>
+                              )}
+                            </details>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+            <div ref={end} />
+          </div>
+          <div className="composer-wrap">
+            <form
+              className="composer"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const q = question.trim();
+                if (!q) return;
+                void perform('Answering', async () => {
+                  await ask({
+                    projectId: project._id,
+                    question: q,
+                    documentIds: [],
+                    config: askConfigSchema.parse(project.retrieval),
+                  });
+                  setQuestion('');
+                });
+              }}
+            >
+              <label className="sr-only" htmlFor="question">
+                Ask your documents
               </label>
-              <small>
-                {d.status} · {d.chunkCount} chunks
-              </small>
-              {!d.activeRun && d.status === 'ready' && (
-                <p className="hint">Legacy document: upload again to create a manifest.</p>
-              )}
-              {d.error && <p className="error">{d.error}</p>}
-              {d.activeRun && (
-                <>
-                  <small>{d.embeddingModel}</small>
-                  <details>
-                    <summary>Manifest and export</summary>
+              <textarea
+                id="question"
+                required
+                rows={2}
+                placeholder="Ask anything about your documents…"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    if (!busy && ready.length && question.trim())
+                      e.currentTarget.form?.requestSubmit();
+                  }
+                }}
+              />
+              <button disabled={!!busy || !ready.length || !question.trim()}>
+                {busy === 'Answering' ? 'Thinking…' : 'Send'}
+              </button>
+            </form>
+            <p className="composer-note">
+              Answers use this project&apos;s documents. Verify important details against the
+              sources.
+            </p>
+          </div>
+        </div>
+      )}
+      {view === 'documents' && (
+        <div className="content-page">
+          <div className="section-heading">
+            <div>
+              <h2>Your source material</h2>
+              <p>
+                Add documents here. Tune how they are indexed in{' '}
+                <Link href={`${root}/settings`}>project settings</Link>.
+              </p>
+            </div>
+            <span className="status-pill">{ready.length} ready</span>
+          </div>
+          <form
+            className="upload-zone"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void perform('Indexing', async () => {
+                if (files.length > 8) throw new Error('Choose up to 8 files per upload');
+                const uploads = [];
+                for (const file of files) {
+                  if (file.size > 4_000_000)
+                    throw new Error(`${file.name} exceeds the upload limit`);
+                  uploads.push({
+                    filename: file.name,
+                    content: decodeDocument(await file.arrayBuffer()),
+                  });
+                }
+                const results = await ingest({
+                  projectId: project._id,
+                  files: uploads,
+                  runName: '',
+                  config: ingestionConfigSchema.parse(project.ingestion),
+                });
+                setFailed(results.some((r) => !!r.error));
+                setNotice(
+                  results
+                    .map(
+                      (r) =>
+                        `${r.filename}: ${r.error ?? (r.reused ? 'Already indexed' : 'Ready')}`,
+                    )
+                    .join('\n'),
+                );
+                setFiles([]);
+              });
+            }}
+          >
+            <span className="upload-symbol" aria-hidden="true">
+              ＋
+            </span>
+            <h3>Add to {project.name}</h3>
+            <p>Markdown and plain text. Up to 8 files, 500,000 characters each.</p>
+            <label>
+              Choose documents
+              <input
+                required
+                type="file"
+                multiple
+                accept=".md,.txt"
+                onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+              />
+            </label>
+            <button disabled={!!busy || !files.length}>
+              {busy === 'Indexing' ? 'Indexing documents…' : 'Index selected documents'}
+            </button>
+            <small>
+              Uses your saved ingestion settings. Existing documents are unaffected by settings
+              changes.
+            </small>
+          </form>
+          <div className="document-list">
+            {docs === undefined ? (
+              <p>Loading documents…</p>
+            ) : !docs.length ? (
+              <p className="hint">No documents yet. Add a source above to get started.</p>
+            ) : (
+              docs.map((d) => (
+                <div className="document-row" key={d._id}>
+                  <span className="file-symbol" aria-hidden="true">
+                    ▤
+                  </span>
+                  <div className="document-info">
+                    <strong>{d.filename}</strong>
+                    <small>
+                      {d.chunkCount} chunks · {d.embeddingModel ?? 'No embedding space'}
+                    </small>
+                    {d.error && <p className="error">{d.error}</p>}
+                  </div>
+                  <span className={`status-pill ${d.status}`}>
+                    {d.pendingRun ? 'Indexing' : d.status}
+                  </span>
+                  <details className="document-actions">
+                    <summary>Details</summary>
+                    <p className="hint">Ingestion manifest</p>
                     <pre>{d.configJson}</pre>
-                    <p>Active embedding run: {d.activeRun}</p>
-                    <button
-                      type="button"
-                      disabled={!!busy}
-                      onClick={() =>
-                        void perform('Exporting', async () => {
-                          const result = await exportDoc({ documentId: d._id });
-                          download(`${d.filename}.chunks.jsonl`, result.chunks);
-                          download(`${d.filename}.embeddings.jsonl`, result.embeddings);
-                        })
-                      }
-                    >
-                      Download chunks and vectors
-                    </button>
+                    {d.activeRun && (
+                      <>
+                        <button
+                          className="secondary"
+                          disabled={!!busy}
+                          onClick={() =>
+                            void perform('Exporting', async () => {
+                              const r = await exportDoc({
+                                projectId: project._id,
+                                documentId: d._id,
+                              });
+                              download(`${d.filename}.chunks.jsonl`, r.chunks);
+                              download(`${d.filename}.embeddings.jsonl`, r.embeddings);
+                            })
+                          }
+                        >
+                          Export chunks & vectors
+                        </button>
+                        <button
+                          className="secondary"
+                          disabled={!!busy || !!d.pendingRun}
+                          onClick={() =>
+                            void perform('Re-embedding', async () => {
+                              await reembed({
+                                projectId: project._id,
+                                documentId: d._id,
+                                embedding: project.retrieval.embedding,
+                                runName: 'Re-embedding',
+                              });
+                              setNotice('Re-embedded with the saved retrieval embedding settings.');
+                            })
+                          }
+                        >
+                          Re-embed with project settings
+                        </button>
+                      </>
+                    )}
                   </details>
+                </div>
+              ))
+            )}
+          </div>
+          {!!legacy?.length && (
+            <details className="legacy-import">
+              <summary>Import documents from your previous library ({legacy.length})</summary>
+              <p className="hint">
+                Move an existing document into this project without indexing it again.
+              </p>
+              {legacy.map((d) => (
+                <div className="import-row" key={d._id}>
+                  <span>{d.filename}</span>
                   <button
-                    type="button"
+                    className="secondary"
                     disabled={!!busy || !!d.pendingRun}
                     onClick={() =>
-                      void perform('Re-embedding', async () => {
-                        await reembed({
-                          documentId: d._id,
-                          embedding: config.embedding,
-                          runName: runName || 'Re-embedding',
-                        });
-                        setNotice('Re-embedding saved. Chunk IDs and context were preserved.');
+                      void perform('Importing', async () => {
+                        await importDoc({ projectId: project._id, documentId: d._id });
                       })
                     }
                   >
-                    Re-embed with selected embedding settings
+                    Import
                   </button>
-                </>
-              )}
-            </div>
-          ))}
-        </aside>
-
-        <div>
-          <section>
-            <h2>Ingest documents</h2>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void perform('Indexing', async () => {
-                  const normalized = ingestionConfigSchema.parse(ingestion);
-                  const uploads = [];
-                  const failures: string[] = [];
-                  for (const file of files) {
-                    try {
-                      uploads.push({
-                        filename: file.name,
-                        content: decodeDocument(await file.arrayBuffer()),
-                      });
-                    } catch (error) {
-                      failures.push(`${file.name}: ${errorText(error)}`);
-                    }
-                  }
-                  const result = uploads.length
-                    ? await ingest({ files: uploads, runName, config: normalized })
-                    : [];
-                  setNotice(
-                    [
-                      ...failures,
-                      ...result.map(
-                        (r) =>
-                          `${r.filename}: ${r.error ?? (r.reused ? 'existing run reused' : 'indexed')}`,
-                      ),
-                    ].join('\n'),
-                  );
-                });
-              }}
-            >
-              <div className="fields">
-                <label>
-                  Documents (.md or .txt)
-                  <input
-                    required
-                    type="file"
-                    multiple
-                    accept=".md,.txt"
-                    onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-                  />
-                </label>
-                <label>
-                  Run name (optional)
-                  <input value={runName} onChange={(e) => setRunName(e.target.value)} />
-                </label>
-              </div>
-              <IngestionControls value={ingestion} onChange={setIngestion} />
-              <button disabled={!!busy || !files.length}>
-                {busy === 'Indexing' ? 'Indexing…' : 'Index selected files'}
-              </button>
-              <p className="hint">
-                Up to 8 files per request; 500,000 code points each. Hosted providers may charge for
-                indexing and answering.
+                </div>
+              ))}
+            </details>
+          )}
+        </div>
+      )}
+      {view === 'settings' && (
+        <div className="content-page settings-page">
+          <div className="section-heading">
+            <div>
+              <h2>Project settings</h2>
+              <p>
+                Saved defaults for {project.name}. Model credentials are configured on the server.
               </p>
-            </form>
-          </section>
-
-          <section>
-            <h2>Ask the collection</h2>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void perform('Answering', async () => {
-                  setAnswer(null);
-                  setAnswer(
-                    await ask({
-                      question,
-                      documentIds: selected,
-                      config: askConfigSchema.parse(config),
-                    }),
-                  );
-                });
-              }}
+            </div>
+          </div>
+          <div className="settings-tabs" role="group" aria-label="Settings category">
+            <button
+              className={settingsTab === 'ingestion' ? '' : 'secondary'}
+              onClick={() => setSettingsTab('ingestion')}
             >
-              <EmbeddingControls
-                value={config.embedding}
-                onChange={(embedding) => setConfig({ ...config, embedding })}
-              />
-              <label>
-                Available indexed embedding spaces
-                <select
-                  value={embeddingKey(config.embedding)}
-                  onChange={(e) => {
-                    const doc = ready.find((d) => d.embeddingModel === e.target.value);
-                    if (doc?.embeddingModel) {
-                      const split = doc.embeddingModel.indexOf(':');
-                      setConfig({
-                        ...config,
-                        embedding: {
-                          ...config.embedding,
-                          provider: embeddingConfigSchema.shape.provider.parse(
-                            doc.embeddingModel.slice(0, split),
-                          ),
-                          model: doc.embeddingModel.slice(split + 1),
-                        },
-                      });
-                    }
-                  }}
+              Ingestion
+            </button>
+            <button
+              className={settingsTab === 'retrieval' ? '' : 'secondary'}
+              onClick={() => setSettingsTab('retrieval')}
+            >
+              Retrieval & answers
+            </button>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void perform('Saving', async () => {
+                await save({
+                  projectId: project._id,
+                  ingestion: ingestionConfigSchema.parse(ingestion),
+                  retrieval: askConfigSchema.parse(retrieval),
+                });
+                setNotice(
+                  'Project settings saved. New uploads and questions will use these settings.',
+                );
+              });
+            }}
+          >
+            {settingsTab === 'ingestion' ? (
+              <>
+                <p className="hint">
+                  Applies to new uploads. Re-upload a document to change chunking or generated
+                  context.
+                </p>
+                <IngestionControls value={ingestion} onChange={setIngestion} />
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setRetrieval({ ...retrieval, embedding: ingestion.embedding })}
                 >
-                  <option value={embeddingKey(config.embedding)}>
-                    {embeddingKey(config.embedding)}
-                  </option>
-                  {Array.from(new Set(ready.map((d) => d.embeddingModel)))
-                    .filter((m) => m && m !== embeddingKey(config.embedding))
-                    .map((m) => (
-                      <option key={m}>{m}</option>
-                    ))}
-                </select>
-              </label>
-              <RetrievalControls value={config} onChange={setConfig} />
-              <fieldset>
-                <legend>Answer generation</legend>
-                <div className="fields">
+                  Use this embedding space for retrieval too
+                </button>
+              </>
+            ) : (
+              <>
+                <fieldset>
+                  <legend>Answer model</legend>
                   <label>
-                    Provider
-                    <select value="openrouter" disabled>
-                      <option>openrouter</option>
-                    </select>
-                  </label>
-                  <label>
-                    Generation model
+                    OpenRouter model
                     <input
                       required
-                      value={config.generation.model}
+                      value={retrieval.generation.model}
                       onChange={(e) =>
-                        setConfig({
-                          ...config,
-                          generation: { ...config.generation, model: e.target.value },
+                        setRetrieval({
+                          ...retrieval,
+                          generation: { ...retrieval.generation, model: e.target.value },
                         })
                       }
                     />
                   </label>
                   <NumberField
                     label="Answer output tokens"
-                    value={config.generation.maxTokens}
+                    value={retrieval.generation.maxTokens}
                     onChange={(maxTokens) =>
-                      setConfig({ ...config, generation: { ...config.generation, maxTokens } })
+                      setRetrieval({
+                        ...retrieval,
+                        generation: { ...retrieval.generation, maxTokens },
+                      })
                     }
                   />
-                </div>
-              </fieldset>
-              <label>
-                Question
-                <textarea
-                  required
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                  rows={3}
-                />
-              </label>
-              <button disabled={!!busy || !ready.length}>
-                {busy === 'Answering' ? 'Answering…' : 'Ask'}
-              </button>
-            </form>
-
-            {answer && (
-              <article>
-                <h2>Answer</h2>
-                <p className="answer-text">{answer.answer}</p>
-                <p>
-                  {answer.latencyMs} ms · Trace {answer.traceId} ·{' '}
-                  {answer.usage.total_tokens ?? 'unknown'} generation tokens
-                </p>
-                <h3>Evidence sent to the model</h3>
-                {answer.sources.map((s, i) => (
-                  <details key={s.chunk_id}>
-                    <summary>
-                      [{i + 1}] {s.source} · chunk {s.chunk_index} · code points {s.start_char}:
-                      {s.end_char} · score {answer.scores[i]?.toFixed(4)}
-                    </summary>
-                    <small>Chunk ID: {s.chunk_id}</small>
-                    {s.context && (
-                      <blockquote>
-                        <strong>Generated retrieval context</strong>
-                        <p>{s.context}</p>
-                      </blockquote>
-                    )}
-                    <p className="source-text">{s.text}</p>
-                  </details>
-                ))}
-              </article>
+                </fieldset>
+                <details>
+                  <summary>Retrieval and reranking</summary>
+                  <RetrievalControls value={retrieval} onChange={setRetrieval} />
+                </details>
+                <details>
+                  <summary>Query embedding space</summary>
+                  <p className="hint">
+                    Must match your indexed documents for semantic and hybrid search. Current
+                    ingestion space: {embeddingKey(ingestion.embedding)}.
+                  </p>
+                  <EmbeddingControls
+                    value={retrieval.embedding}
+                    onChange={(embedding) => setRetrieval({ ...retrieval, embedding })}
+                  />
+                </details>
+              </>
             )}
-          </section>
+            <div className="settings-save">
+              <button disabled={!!busy}>
+                {busy === 'Saving' ? 'Saving…' : 'Save project settings'}
+              </button>
+            </div>
+          </form>
         </div>
-      </div>
-
-      <section>
-        <h2>Indexing runs</h2>
-        {runs.map((r) => (
-          <details key={r._id}>
-            <summary>
-              {r.name} · {r.kind} · {r.status}
-            </summary>
-            <pre>{r.configJson}</pre>
-            {r.usageJson && <pre>{r.usageJson}</pre>}
-            {r.error && <p className="error">{r.error}</p>}
-          </details>
-        ))}
-      </section>
-      <section>
-        <h2>Recent question traces</h2>
-        {traces.map((t) => (
-          <details key={t._id}>
-            <summary>
-              {t.status ?? 'legacy success'} · {t.question} · {t.totalLatencyMs} ms
-            </summary>
-            <p>{t.answer || t.error}</p>
-            <pre>{t.configJson}</pre>
-          </details>
-        ))}
-      </section>
-    </main>
+      )}
+    </>
   );
 }

@@ -23,8 +23,31 @@ import { EmbeddingControls, NumberField, RetrievalControls } from './Controls';
 import { download } from './RagWorkspace';
 
 export function EvaluationWorkspace() {
-  const documents = useQuery(api.documents.list) ?? [];
-  const runs = useQuery(api.documents.evaluations) ?? [];
+  const projects = useQuery(api.projects.list) ?? [];
+  const [selected, setSelected] = useState('');
+  const project = projects.find((p) => p._id === selected);
+  return (
+    <>
+      <div className="shell">
+        <label>
+          Evaluation project
+          <select value={selected} onChange={(e) => setSelected(e.target.value)}>
+            <option value="">Previous library (unassigned)</option>
+            {projects.map((p) => (
+              <option key={p._id} value={p._id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <EvaluationProject key={selected} projectId={project?._id} />
+    </>
+  );
+}
+function EvaluationProject({ projectId }: { projectId?: Id<'projects'> }) {
+  const documents = useQuery(api.documents.list, { projectId }) ?? [];
+  const runs = useQuery(api.documents.evaluations, { projectId }) ?? [];
   const run = useAction(api.rag.runEvaluation);
 
   const [config, setConfig] = useState(DEFAULT_ASK);
@@ -72,6 +95,7 @@ export function EvaluationWorkspace() {
                 ks,
               });
               await run({
+                ...(projectId ? { projectId } : {}),
                 datasetName: dataset.name,
                 datasetJsonl: dataset.text,
                 documentIds,

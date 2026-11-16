@@ -38,9 +38,11 @@ async function snapshot(
   documentIds: Id<'documents'>[],
   config: AskConfig,
   allModels = false,
+  projectId?: Id<'projects'>,
 ) {
   const documents = await ctx.runQuery(internal.documents.selection, {
     documentIds,
+    ...(projectId ? { projectId } : {}),
     model: embeddingKey(config.embedding),
     allModels,
   });
@@ -134,6 +136,7 @@ async function persist(
 }
 export const ingest = action({
   args: {
+    projectId: v.optional(v.id('projects')),
     files: v.array(v.object({ filename: v.string(), content: v.string() })),
     runName: v.string(),
     config: validators.ingestion,
@@ -164,6 +167,7 @@ export const ingest = action({
         if (chunkText(content, config).length > 10_000)
           throw new Error('Choose larger chunks: at most 10,000 chunks per document');
         reservation = await ctx.runMutation(internal.documents.reserve, {
+          ...(args.projectId ? { projectId: args.projectId } : {}),
           filename: file.filename,
           contentHash: hash(content),
           configHash: hash(JSON.stringify(config)),
@@ -214,7 +218,12 @@ export const ingest = action({
   },
 });
 export const ask = action({
-  args: { question: v.string(), documentIds: v.array(v.id('documents')), config: validators.ask },
+  args: {
+    projectId: v.optional(v.id('projects')),
+    question: v.string(),
+    documentIds: v.array(v.id('documents')),
+    config: validators.ask,
+  },
   handler: async (
     ctx,
     args,
@@ -228,6 +237,7 @@ export const ask = action({
   }> => {
     const start = Date.now();
     const traceId = await ctx.runMutation(internal.documents.startTrace, {
+      ...(args.projectId ? { projectId: args.projectId } : {}),
       question: args.question,
       configJson: JSON.stringify({ ...args.config, documentIds: args.documentIds }),
       model: args.config.generation.model,
@@ -241,6 +251,7 @@ export const ask = action({
         args.documentIds,
         config,
         config.fullContext || config.method === 'bm25' || config.method === 'tfidf',
+        args.projectId,
       );
       const result = await askConfigured(question, data.corpus, config);
       const sourceChunkIds = result.sources.flatMap((s) => {
@@ -282,11 +293,16 @@ export const ask = action({
   },
 });
 export const reembed = action({
-  args: { documentId: v.id('documents'), embedding: validators.embedding, runName: v.string() },
+  args: {
+    projectId: v.optional(v.id('projects')),
+    documentId: v.id('documents'),
+    embedding: validators.embedding,
+    runName: v.string(),
+  },
   handler: async (ctx, args): Promise<Id<'runs'>> => {
     const embedding = embeddingConfigSchema.parse(args.embedding);
     const config = askConfigSchema.parse({ embedding });
-    const data = await snapshot(ctx, [args.documentId], config, true);
+    const data = await snapshot(ctx, [args.documentId], config, true, args.projectId);
     const doc = data.documents[0];
     if (!doc?.configJson) throw new Error('Document is missing its ingestion manifest');
     const current = ingestionConfigSchema.parse(JSON.parse(doc.configJson));
@@ -326,10 +342,11 @@ export const reembed = action({
   },
 });
 export const exportDocument = action({
-  args: { documentId: v.id('documents') },
+  args: { projectId: v.optional(v.id('projects')), documentId: v.id('documents') },
   handler: async (ctx, args): Promise<{ chunks: string; embeddings: string }> => {
     const config = askConfigSchema.parse({});
     const docs = await ctx.runQuery(internal.documents.selection, {
+      ...(args.projectId ? { projectId: args.projectId } : {}),
       documentIds: [args.documentId],
       allModels: true,
     });
@@ -340,7 +357,7 @@ export const exportDocument = action({
       provider: doc.embeddingModel.slice(0, separator),
       model: doc.embeddingModel.slice(separator + 1),
     });
-    const data = await snapshot(ctx, [args.documentId], config);
+    const data = await snapshot(ctx, [args.documentId], config, false, args.projectId);
     return {
       chunks: serializeJsonl(data.corpus.chunks),
       embeddings: serializeJsonl(data.corpus.embeddings),
@@ -349,6 +366,7 @@ export const exportDocument = action({
 });
 export const runEvaluation = action({
   args: {
+    projectId: v.optional(v.id('projects')),
     datasetName: v.string(),
     datasetJsonl: v.string(),
     documentIds: v.array(v.id('documents')),
@@ -356,6 +374,7 @@ export const runEvaluation = action({
   },
   handler: async (ctx, args): Promise<Id<'evaluations'>> => {
     const id = await ctx.runMutation(internal.documents.startEvaluation, {
+      ...(args.projectId ? { projectId: args.projectId } : {}),
       name: args.datasetName,
       datasetJson: args.datasetJsonl,
       configJson: JSON.stringify(args.config),
@@ -367,7 +386,13 @@ export const runEvaluation = action({
       const cases = parseJsonl(args.datasetJsonl, evaluationCaseSchema);
       if (cases.length > 200) throw new Error('Run at most 200 questions per evaluation');
       const semantic = config.methods.some((m) => m === 'semantic' || m === 'hybrid');
-      const data = await snapshot(ctx, args.documentIds, config.retrieval, !semantic);
+      const data = await snapshot(
+        ctx,
+        args.documentIds,
+        config.retrieval,
+        !semantic,
+        args.projectId,
+      );
       for (const method of config.methods)
         for (const topK of config.ks)
           reports.push(
